@@ -225,8 +225,10 @@ create_db_req(#httpd{}=Req, DbName) ->
     N = couch_httpd:qs_value(Req, "n", config:get("cluster", "n", "3")),
     Q = couch_httpd:qs_value(Req, "q", config:get("cluster", "q", "8")),
     P = couch_httpd:qs_value(Req, "placement", config:get("cluster", "placement")),
+    DefaultAlgo = config:get("cluster", "hash_algorithm", "crc32"),
+    HashAlgo = couch_httpd:qs_value(Req, "hash_algorithm", DefaultAlgo),
     DocUrl = absolute_uri(Req, "/" ++ couch_util:url_encode(DbName)),
-    case fabric:create_db(DbName, [{n,N}, {q,Q}, {placement,P}]) of
+    case fabric:create_db(DbName, [{n,N}, {q,Q}, {placement,P},{hash_algo,HashAlgo}]) of
     ok ->
         send_json(Req, 201, [{"Location", DocUrl}], {[{ok, true}]});
     accepted ->
