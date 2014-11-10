@@ -548,9 +548,20 @@ all_docs_view(Req, Db, Keys) ->
     end,
     Args = Args0#mrargs{preflight_fun=ETagFun},
     Options = [{user_ctx, Req#httpd.user_ctx}],
+    DbName = ?b2l(Db#db.name),
+    UsersDbName = config:get("chttpd_auth",
+                             "authentication_db",
+                             "_users"),
+    IsAdmin = case catch couch_db:check_is_admin(Db) of
+    {unauthorized, _} ->
+        false;
+    ok ->
+        true
+    end,
+    Callback = couch_mrview_http:get_view_callback(DbName, UsersDbName, IsAdmin),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
         VAcc0 = #vacc{db=Db, req=Req},
-        fabric:all_docs(Db, Options, fun couch_mrview_http:view_cb/2, VAcc0, Args)
+        fabric:all_docs(Db, Options, Callback, VAcc0, Args)
     end),
     case is_record(Resp, vacc) of
         true -> {ok, Resp#vacc.resp};
