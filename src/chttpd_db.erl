@@ -56,7 +56,16 @@ handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
         do_db_req(Req, Handler)
     end.
 
-handle_changes_req(#httpd{method='GET'}=Req, Db) ->
+handle_changes_req(#httpd{method='GET'}=Req, #db{name=DbName}=Db) ->
+    AuthDbName = ?l2b(config:get("chttpd_auth", "authentication_db")),
+    case AuthDbName of
+    DbName ->
+        % in the authentication database, _changes is admin-only.
+        ok = couch_db:check_is_admin(Db);
+    _Else ->
+        % on other databases, _changes is free for all.
+        ok
+    end,
     #changes_args{filter=Raw, style=Style} = Args0 = parse_changes_query(Req),
     ChangesArgs = Args0#changes_args{
         filter_fun = couch_changes:configure_filter(Raw, Style, Req, Db)
