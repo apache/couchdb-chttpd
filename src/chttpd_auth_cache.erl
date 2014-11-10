@@ -17,6 +17,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 	 code_change/3]).
 -export([listen_for_changes/1, changes_callback/2]).
+-export([update_auth_doc/1]).
 
 -include_lib("couch/include/couch_db.hrl").
 
@@ -32,6 +33,10 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+update_auth_doc(Doc) ->
+    DbName = ?l2b(config:get("chttpd_auth", "authentication_db", "_users")),
+    fabric:update_doc(DbName, Doc, []).
 
 get_user_creds(UserName) when is_list(UserName) ->
     get_user_creds(?l2b(UserName));
