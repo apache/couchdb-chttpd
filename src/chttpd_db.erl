@@ -202,6 +202,13 @@ handle_design_req(#httpd{
         path_parts=[_DbName, _Design, Name, <<"_",_/binary>> = Action | _Rest],
         design_url_handlers = DesignUrlHandlers
     }=Req, Db) ->
+    case catch(check_admin_if_auth_db(Db)) of
+    ok ->
+        ok;
+    _ ->
+        throw({forbidden,
+            <<"Only administrators can view design docs in the users database.">>})
+    end,
     DbName = mem3:dbname(Db#db.name),
     case ddoc_cache:open(DbName, <<"_design/", Name/binary>>) of
     {ok, DDoc} ->
@@ -622,6 +629,18 @@ db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
     send_updated_doc(Req, Db, DocId, couch_doc_from_req(Req, DocId, Body));
 
 db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
+    case DocId of
+    <<"_design/", _/binary>> ->
+        case catch(check_admin_if_auth_db(Db)) of
+        ok ->
+            ok;
+        _ ->
+            throw({forbidden,
+                <<"Only administrators can view design docs in the users database.">>})
+        end;
+    _Else ->
+        ok
+    end,
     #doc_query_args{
         rev = Rev,
         open_revs = Revs,
@@ -1506,6 +1525,22 @@ put_security(#httpd{user_ctx=Ctx}=Req, Db, FetchRev) ->
                 Else ->
                     throw(Else)
             end
+    end.
+
+check_admin_if_auth_db(Db) ->
+    DbName = mem3:dbname(Db#db.name),
+    AuthDbName = ?l2b(config:get("chttpd_auth", "authentication_db")),
+    case AuthDbName of
+    DbName ->
+        {SecProps} = fabric:get_security(DbName),
+        case (catch couch_db:check_is_admin(Db#db{security=SecProps})) of
+        ok ->
+            ok;
+        _ ->
+            throw(forbidden)
+        end;
+    _Else ->
+        ok
     end.
 
 -ifdef(TEST).
