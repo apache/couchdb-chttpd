@@ -177,8 +177,7 @@ assertReturns(Endpoint, M, F) ->
         io:format(user, "~-47...s ", [Endpoint]),
         meck:expect(M, F, fun(X) -> {return, Endpoint, X} end),
         Fun = chttpd_handler:url_handler(Endpoint),
-        ?assertEqual({return, Endpoint, x}, Fun(x)),
-        io:format(user, "ok~n", [])
+        ?assertEqual({return, Endpoint, x}, Fun(x))
     after
         meck:unload(M)
     end.
@@ -207,8 +206,7 @@ assertReturns(HandlerLister, Endpoint, M, F, Arity) ->
             meck:expect(M, F, fun(X, Y, Z) -> {return, Endpoint, X, Y, Z} end),
             {_, Fun} = lists:keyfind(Endpoint, 1, chttpd_handler:HandlerLister()),
             ?assertEqual({return, Endpoint, x, y, z}, Fun(x, y, z))
-        end,
-        io:format(user, "ok~n", [])
+        end
     after
         meck:unload(M)
     end.
