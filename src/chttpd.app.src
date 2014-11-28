@@ -41,7 +41,9 @@
         couch,
         ets_lru,
         fabric,
-        cassim
+        cassim,
+        mem3,
+        global_changes
     ]},
     {mod, {chttpd_app,[]}}
 ]}.

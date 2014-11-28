@@ -100,6 +100,7 @@ start_link(https) ->
     start_link(https, Options).
 
 start_link(Name, Options) ->
+    chttpd_handler:build(),
     Options1 = Options ++ [
         {loop, fun ?MODULE:handle_request/1},
         {name, Name},
@@ -187,8 +188,8 @@ handle_request(MochiReq) ->
         method = Method,
         path_parts = [list_to_binary(chttpd:unquote(Part))
                 || Part <- string:tokens(Path, "/")],
-        db_url_handlers = db_url_handlers(),
-        design_url_handlers = design_url_handlers()
+        db_url_handlers = chttpd_handler:db_url_handlers(),
+        design_url_handlers = chttpd_handler:design_url_handlers()
     },
 
     % put small token on heap to keep requests synced to backend calls
@@ -204,7 +205,7 @@ handle_request(MochiReq) ->
         #httpd{} ->
             case authenticate_request(HttpReq, AuthenticationFuns) of
             #httpd{} = Req ->
-                HandlerFun = url_handler(HandlerKey),
+                HandlerFun = chttpd_handler:url_handler(HandlerKey),
                 HandlerFun(chttpd_auth_request:authorize_request(possibly_hack(Req)));
             Response ->
                 Response
@@ -356,43 +357,6 @@ authenticate_request(Response, _AuthFuns) ->
 
 increment_method_stats(Method) ->
     couch_stats:increment_counter([couchdb, httpd_request_methods, Method]).
-
-url_handler("") ->              fun chttpd_misc:handle_welcome_req/1;
-url_handler("favicon.ico") ->   fun chttpd_misc:handle_favicon_req/1;
-url_handler("_utils") ->        fun chttpd_misc:handle_utils_dir_req/1;
-url_handler("_all_dbs") ->      fun chttpd_misc:handle_all_dbs_req/1;
-url_handler("_active_tasks") -> fun chttpd_misc:handle_task_status_req/1;
-url_handler("_config") ->       fun chttpd_misc:handle_config_req/1;
-url_handler("_reload_query_servers") -> fun chttpd_misc:handle_reload_query_servers_req/1;
-url_handler("_replicate") ->    fun chttpd_misc:handle_replicate_req/1;
-url_handler("_uuids") ->        fun chttpd_misc:handle_uuids_req/1;
-url_handler("_sleep") ->        fun chttpd_misc:handle_sleep_req/1;
-url_handler("_session") ->      fun chttpd_auth:handle_session_req/1;
-url_handler("_oauth") ->        fun couch_httpd_oauth:handle_oauth_req/1;
-url_handler("_up") ->           fun chttpd_misc:handle_up_req/1;
-url_handler("_membership") ->   fun mem3_httpd:handle_membership_req/1;
-url_handler("_db_updates") ->   fun global_changes_httpd:handle_global_changes_req/1;
-url_handler(_) ->               fun chttpd_db:handle_request/1.
-
-db_url_handlers() ->
-    [
-        {<<"_view_cleanup">>,   fun chttpd_db:handle_view_cleanup_req/2},
-        {<<"_compact">>,        fun chttpd_db:handle_compact_req/2},
-        {<<"_design">>,         fun chttpd_db:handle_design_req/2},
-        {<<"_temp_view">>,      fun chttpd_view:handle_temp_view_req/2},
-        {<<"_changes">>,        fun chttpd_db:handle_changes_req/2},
-        {<<"_shards">>,         fun mem3_httpd:handle_shards_req/2}
-    ].
-
-design_url_handlers() ->
-    [
-        {<<"_view">>,           fun chttpd_view:handle_view_req/3},
-        {<<"_show">>,           fun chttpd_show:handle_doc_show_req/3},
-        {<<"_list">>,           fun chttpd_show:handle_view_list_req/3},
-        {<<"_update">>,         fun chttpd_show:handle_doc_update_req/3},
-        {<<"_info">>,           fun chttpd_db:handle_design_info_req/3},
-        {<<"_rewrite">>,        fun chttpd_rewrite:handle_rewrite_req/3}
-    ].
 
 % Utilities
 
