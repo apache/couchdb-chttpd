@@ -67,43 +67,19 @@ all_test_() ->
         assertReturns("_uuids", chttpd_misc, handle_uuids_req)
     end,
     fun() ->
-        assertReturns("_log", chttpd_misc, handle_log_req)
-    end,
-    fun() ->
         assertReturns("_sleep", chttpd_misc, handle_sleep_req)
     end,
     fun() ->
         assertReturns("_session", chttpd_auth, handle_session_req)
     end,
     fun() ->
-        assertReturns("_user", chttpd_auth, handle_user_req)
-    end,
-    fun() ->
         assertReturns("_oauth", couch_httpd_oauth, handle_oauth_req)
-    end,
-    fun() ->
-        assertReturns("_system", chttpd_misc, handle_system_req)
-    end,
-    fun() ->
-        assertReturns("_pid", chttpd_misc, handle_pid_req)
     end,
     fun() ->
         assertReturns("_up", chttpd_misc, handle_up_req)
     end,
     fun() ->
         assertReturns("_membership", mem3_httpd, handle_membership_req)
-    end,
-    fun() ->
-        assertReturns("_cloudant", showroom_httpd_admin, handle_cloudant_req)
-    end,
-    fun() ->
-        assertReturns("_ioq", chttpd_misc, handle_ioq_req)
-    end,
-    fun() ->
-        assertReturns("_sauth", delegated_auth, handle_delegated_auth_req)
-    end,
-    fun() ->
-        assertReturns("_search_analyze", dreyfus_httpd, handle_analyze_req)
     end,
     fun() ->
         assertReturns("_db_updates", global_changes_httpd,
@@ -145,18 +121,8 @@ all_test_() ->
         assertReturns(db_url_handlers, <<"_changes">>, chttpd_db,
             handle_changes_req, 2) end,
     fun() ->
-        assertReturns(db_url_handlers, <<"_search_cleanup">>, dreyfus_httpd,
-            handle_cleanup_req, 2)
-    end,
-    fun() ->
         assertReturns(db_url_handlers, <<"_shards">>, mem3_httpd,
             handle_shards_req, 2) end,
-    fun() ->
-        assertReturns(db_url_handlers, <<"_index">>, mango_httpd, handle_req, 2)
-    end,
-    fun() ->
-        assertReturns(db_url_handlers, <<"_find">>, mango_httpd, handle_req, 2)
-    end,
 
     % Test the test: when the final target function is missing, the Fun call
     % must fail, with any argument, including valid ones.
@@ -190,12 +156,6 @@ all_test_() ->
     fun() ->
         assertReturns(design_url_handlers, <<"_rewrite">>, chttpd_rewrite,
             handle_rewrite_req, 3) end,
-    fun() ->
-        assertReturns(design_url_handlers, <<"_search">>, dreyfus_httpd,
-            handle_search_req, 3) end,
-    fun() ->
-        assertReturns(design_url_handlers, <<"_search_info">>, dreyfus_httpd,
-            handle_info_req, 3) end,
 
     % Test the test: when the final target function is missing, the Fun call
     % must fail with any argument, including valid ones.
@@ -296,7 +256,7 @@ test_cfg() ->
     {<<"_design">>,           {chttpd_db, handle_design_req, 2}},
     {<<"_temp_view">>,        {chttpd_view, handle_temp_view_req, 2}},
     {<<"_changes">>,          {chttpd_db, handle_changes_req, 2}},
-    {<<"_shards">>,           {mem3_httpd, handle_shards_req, 2}}
+    {<<"_shards">>,           {mem3_httpd, handle_shards_req, 2}}]},
 {design_url_handlers, list, [
     {<<"_view">>,             {chttpd_view, handle_view_req, 3}},
     {<<"_show">>,             {chttpd_show, handle_doc_show_req, 3}},
