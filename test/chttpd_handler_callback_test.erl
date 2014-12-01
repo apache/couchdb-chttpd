@@ -177,7 +177,7 @@ assertReturns(Endpoint, M, F) ->
         io:format(user, "~-47...s ", [Endpoint]),
         meck:expect(M, F, fun(X) -> {return, Endpoint, X} end),
         Fun = chttpd_handler:url_handler(Endpoint),
-        ?assertEqual({return, Endpoint, x}, Fun(x))
+        ?_assertEqual({return, Endpoint, x}, Fun(x))
     after
         meck:unload(M)
     end.
@@ -187,7 +187,7 @@ assertUnmockedFails(Endpoint, M) ->
     meck:new(M, [non_strict]),
     try
         Fun = chttpd_handler:url_handler(Endpoint),
-        ?assertError(undef, Fun(x))
+        ?_assertError(undef, Fun(x))
     after
         meck:unload(M)
     end.
@@ -201,11 +201,11 @@ assertReturns(HandlerLister, Endpoint, M, F, Arity) ->
         2 ->
             meck:expect(M, F, fun(X, Y) -> {return, Endpoint, X, Y} end),
             {_, Fun} = lists:keyfind(Endpoint, 1, chttpd_handler:HandlerLister()),
-            ?assertEqual({return, Endpoint, x, y}, Fun(x, y));
+            ?_assertEqual({return, Endpoint, x, y}, Fun(x, y));
         3 ->
             meck:expect(M, F, fun(X, Y, Z) -> {return, Endpoint, X, Y, Z} end),
             {_, Fun} = lists:keyfind(Endpoint, 1, chttpd_handler:HandlerLister()),
-            ?assertEqual({return, Endpoint, x, y, z}, Fun(x, y, z))
+            ?_assertEqual({return, Endpoint, x, y, z}, Fun(x, y, z))
         end
     after
         meck:unload(M)
@@ -217,8 +217,8 @@ assertUnmockedFails(HandlerLister, Endpoint, M, Arity) ->
     try
         {_, Fun} = lists:keyfind(Endpoint, 1, chttpd_handler:HandlerLister()),
         case Arity of
-        2 -> ?assertError(undef, Fun(x, y));
-        3 -> ?assertError(undef, Fun(x, y, z))
+        2 -> ?_assertError(undef, Fun(x, y));
+        3 -> ?_assertError(undef, Fun(x, y, z))
         end
     after
         meck:unload(M)
