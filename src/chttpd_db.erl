@@ -56,7 +56,16 @@ handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
         do_db_req(Req, Handler)
     end.
 
-handle_changes_req(#httpd{method='GET'}=Req, Db) ->
+handle_changes_req(#httpd{method='GET'}=Req, #db{name=DbName}=Db) ->
+    AuthDbName = ?l2b(config:get("chttpd_auth", "authentication_db")),
+    case AuthDbName of
+    DbName ->
+        % in the authentication database, _changes is admin-only.
+        ok = couch_db:check_is_admin(Db);
+    _Else ->
+        % on other databases, _changes is free for all.
+        ok
+    end,
     #changes_args{filter=Raw, style=Style} = Args0 = parse_changes_query(Req),
     ChangesArgs = Args0#changes_args{
         filter_fun = couch_changes:configure_filter(Raw, Style, Req, Db)
@@ -193,6 +202,13 @@ handle_design_req(#httpd{
         path_parts=[_DbName, _Design, Name, <<"_",_/binary>> = Action | _Rest],
         design_url_handlers = DesignUrlHandlers
     }=Req, Db) ->
+    case catch(check_admin_if_auth_db(Db)) of
+    ok ->
+        ok;
+    _ ->
+        throw({forbidden,
+            <<"Only administrators can view design docs in the users database.">>})
+    end,
     DbName = mem3:dbname(Db#db.name),
     case ddoc_cache:open(DbName, <<"_design/", Name/binary>>) of
     {ok, DDoc} ->
@@ -248,9 +264,21 @@ delete_db_req(#httpd{}=Req, DbName) ->
         throw(Error)
     end.
 
+get_db_options(DbName) ->
+    IsReplicatorDb = DbName == config:get("replicator", "db", "_replicator"),
+    IsUsersDb = DbName ==config:get("chttpd_auth", "authentication_db", "_users") orelse
+    binary_to_list(mem3:dbname(DbName)) == config:get("chttpd_auth", "authentication_db", "_users"),
+    case {IsReplicatorDb, IsUsersDb} of
+    {false, false} ->
+        [];
+    _Else ->
+        [sys_db]
+    end.
+
 do_db_req(#httpd{path_parts=[DbName|_], user_ctx=Ctx}=Req, Fun) ->
     cassim:get_security(DbName, [{user_ctx,Ctx}]), % calls check_is_reader
-    Fun(Req, #db{name=DbName, user_ctx=Ctx}).
+    Options = get_db_options(DbName),
+    Fun(Req, #db{name=DbName, user_ctx=Ctx, options=Options}).
 
 db_req(#httpd{method='GET',path_parts=[DbName]}=Req, _Db) ->
     % measure the time required to generate the etag, see if it's worth it
@@ -416,9 +444,9 @@ db_req(#httpd{path_parts=[_,<<"_purge">>]}=Req, _Db) ->
 db_req(#httpd{method='GET',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
     case chttpd:qs_json_value(Req, "keys", nil) of
     Keys when is_list(Keys) ->
-        all_docs_view(Req, Db, Keys);
+        all_docs_req(Req, Db, Keys);
     nil ->
-        all_docs_view(Req, Db, undefined);
+        all_docs_req(Req, Db, undefined);
     _ ->
         throw({bad_request, "`keys` parameter must be an array."})
     end;
@@ -427,9 +455,9 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
     {Fields} = chttpd:json_body_obj(Req),
     case couch_util:get_value(<<"keys">>, Fields, nil) of
     Keys when is_list(Keys) ->
-        all_docs_view(Req, Db, Keys);
+        all_docs_req(Req, Db, Keys);
     nil ->
-        all_docs_view(Req, Db, undefined);
+        all_docs_req(Req, Db, undefined);
     _ ->
         throw({bad_request, "`keys` body member must be an array."})
     end;
@@ -532,6 +560,36 @@ db_req(#httpd{path_parts=[_, DocId]}=Req, Db) ->
 db_req(#httpd{path_parts=[_, DocId | FileNameParts]}=Req, Db) ->
     db_attachment_req(Req, Db, DocId, FileNameParts).
 
+all_docs_req(Req, Db, Keys) ->
+    case couch_db:is_system_db(Db) of
+    true ->
+        case (catch couch_db:check_is_admin(Db)) of
+        ok ->
+            all_docs_view(Req, Db, Keys);
+        _ ->
+            DbName = ?b2l(Db#db.name),
+            case config:get("chttpd_auth",
+                                  "authentication_db",
+                                  "_users") of
+            DbName ->
+                UsersDbPublic = config:get("chttpd_auth", "users_db_public", "false"),
+                PublicFields = config:get("chttpd_auth", "public_fields"),
+                case {UsersDbPublic, PublicFields} of
+                {"true", PublicFields} when PublicFields =/= undefined ->
+                    all_docs_view(Req, Db, Keys);
+                {_, _} ->
+                    throw({forbidden, <<"Only admins can access _all_docs",
+                                        " of system databases.">>})
+                end;
+            _ ->
+                throw({forbidden, <<"Only admins can access _all_docs",
+                                    " of system databases.">>})
+            end
+        end;
+    false ->
+        all_docs_view(Req, Db, Keys)
+    end.
+
 all_docs_view(Req, Db, Keys) ->
     Args0 = couch_mrview_http:parse_params(Req, Keys),
     ETagFun = fun(Sig, Acc0) ->
@@ -539,9 +597,20 @@ all_docs_view(Req, Db, Keys) ->
     end,
     Args = Args0#mrargs{preflight_fun=ETagFun},
     Options = [{user_ctx, Req#httpd.user_ctx}],
+    DbName = ?b2l(Db#db.name),
+    UsersDbName = config:get("chttpd_auth",
+                             "authentication_db",
+                             "_users"),
+    IsAdmin = case catch couch_db:check_is_admin(Db) of
+    {unauthorized, _} ->
+        false;
+    ok ->
+        true
+    end,
+    Callback = couch_mrview_http:get_view_callback(DbName, UsersDbName, IsAdmin),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
         VAcc0 = #vacc{db=Db, req=Req},
-        fabric:all_docs(Db, Options, fun couch_mrview_http:view_cb/2, VAcc0, Args)
+        fabric:all_docs(Db, Options, Callback, VAcc0, Args)
     end),
     case is_record(Resp, vacc) of
         true -> {ok, Resp#vacc.resp};
@@ -560,6 +629,18 @@ db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
     send_updated_doc(Req, Db, DocId, couch_doc_from_req(Req, DocId, Body));
 
 db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
+    case DocId of
+    <<"_design/", _/binary>> ->
+        case catch(check_admin_if_auth_db(Db)) of
+        ok ->
+            ok;
+        _ ->
+            throw({forbidden,
+                <<"Only administrators can view design docs in the users database.">>})
+        end;
+    _Else ->
+        ok
+    end,
     #doc_query_args{
         rev = Rev,
         open_revs = Revs,
@@ -1444,6 +1525,22 @@ put_security(#httpd{user_ctx=Ctx}=Req, Db, FetchRev) ->
                 Else ->
                     throw(Else)
             end
+    end.
+
+check_admin_if_auth_db(Db) ->
+    DbName = mem3:dbname(Db#db.name),
+    AuthDbName = ?l2b(config:get("chttpd_auth", "authentication_db")),
+    case AuthDbName of
+    DbName ->
+        {SecProps} = fabric:get_security(DbName),
+        case (catch couch_db:check_is_admin(Db#db{security=SecProps})) of
+        ok ->
+            ok;
+        _ ->
+            throw(forbidden)
+        end;
+    _Else ->
+        ok
     end.
 
 -ifdef(TEST).

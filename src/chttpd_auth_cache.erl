@@ -12,11 +12,14 @@
 
 -module(chttpd_auth_cache).
 -behaviour(gen_server).
+-behaviour(config_listener).
 
 -export([start_link/0, get_user_creds/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 	 code_change/3]).
 -export([listen_for_changes/1, changes_callback/2]).
+-export([update_auth_doc/1]).
+-export([handle_config_change/5]).
 
 -include_lib("couch/include/couch_db.hrl").
 
@@ -32,6 +35,10 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+update_auth_doc(Doc) ->
+    DbName = ?l2b(config:get("chttpd_auth", "authentication_db", "_users")),
+    fabric:update_doc(DbName, Doc, []).
 
 get_user_creds(UserName) when is_list(UserName) ->
     get_user_creds(?l2b(UserName));
@@ -71,8 +78,12 @@ get_from_cache(UserName) ->
 %% gen_server callbacks
 
 init([]) ->
+    ok = config:listen_for_changes(?MODULE, nil),
     {ok, #state{changes_pid = spawn_changes(0)}}.
 
+handle_call(restart_listener, _From, #state{changes_pid=Pid} = State) ->
+    exit(Pid, kill),
+    {reply, ok, State};
 handle_call(_Call, _From, State) ->
     {noreply, State}.
 
@@ -91,6 +102,12 @@ handle_info({'DOWN', _, _, Pid, Reason}, #state{changes_pid=Pid} = State) ->
     {noreply, State#state{last_seq=Seq}};
 handle_info({start_listener, Seq}, State) ->
     {noreply, State#state{changes_pid = spawn_changes(Seq)}};
+handle_info({gen_event_EXIT, {config_listener, ?MODULE}, _Reason}, State) ->
+    erlang:send_after(5000, self(), restart_config_listener),
+    {noreply, State};
+handle_info(restart_config_listener, State) ->
+    ok = config:listen_for_changes(?MODULE, nil),
+    {noreply, State};
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -99,6 +116,11 @@ terminate(_Reason, #state{changes_pid = Pid}) ->
 
 code_change(_OldVsn, #state{}=State, _Extra) ->
     {ok, State}.
+
+handle_config_change("chttpd_auth", "authentication_db", _, _, _) ->
+    {ok, gen_server:call(?MODULE, restart_listener, infinity)};
+handle_config_change(_, _, _, _, _) ->
+    {ok, nil}.
 
 %% private functions
 
