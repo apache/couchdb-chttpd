@@ -265,11 +265,9 @@ delete_db_req(#httpd{}=Req, DbName) ->
     end.
 
 get_db_options(DbName) ->
-    IsReplicatorDb = DbName == config:get("replicator", "db", "_replicator"),
-    IsUsersDb = DbName ==config:get("chttpd_auth", "authentication_db", "_users") orelse
-    binary_to_list(mem3:dbname(DbName)) == config:get("chttpd_auth", "authentication_db", "_users"),
-    case {IsReplicatorDb, IsUsersDb} of
-    {false, false} ->
+    IsUsersDb = binary_to_list(DbName) == config:get("chttpd_auth", "authentication_db", "_users"),
+    case IsUsersDb of
+    false ->
         [];
     _Else ->
         [sys_db]
