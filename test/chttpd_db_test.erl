@@ -30,9 +30,12 @@ teardown(Url) ->
 create_db(Url) ->
     {ok, _, _, _} = test_request:put(Url,
                 [{"Content-Type", "application/json"}], "{}").
-
 delete_db(Url) ->
     {ok, _, _, _} = test_request:delete(Url).
+
+create_doc(Url, Id) ->
+    test_request:put(Url ++ "/" ++ Id,
+        [{"Content-Type", "application/json"}], "{\"mr\": \"rocko artischockbert\"}").
 
 all_test_() ->
     {
@@ -44,7 +47,11 @@ all_test_() ->
                 foreach,
                 fun setup/0, fun teardown/1,
                 [
-                    fun should_return_ok_true_on_bulk_update/1
+                    fun should_return_ok_true_on_bulk_update/1,
+                    fun should_send_headers_for_downloading_docs_if_query_param_passed/1,
+                    fun should_not_send_headers_for_downloading_docs_if_no_query_param_passed/1,
+                    fun should_send_headers_for_downloading_ddocs_if_query_param_passed/1,
+                    fun should_not_send_headers_for_downloading_ddocs_if_no_query_param_passed/1
                 ]
             }
         }
@@ -54,8 +61,7 @@ all_test_() ->
 should_return_ok_true_on_bulk_update(Url) ->
     ?_assertEqual(true,
         begin
-            {ok, _, _, Body} = test_request:put(Url ++ "/testdoc",
-                [{"Content-Type", "application/json"}], "{}"),
+            {ok, _, _, Body} = create_doc(Url, "testdoc"),
             {Json} = ?JSON_DECODE(Body),
             Ref = couch_util:get_value(<<"rev">>, Json, undefined),
             NewDoc = "{\"docs\": [{\"_rev\": \"" ++ ?b2l(Ref) ++ "\", \"_id\": \"testdoc\"}]}",
@@ -64,4 +70,36 @@ should_return_ok_true_on_bulk_update(Url) ->
             ResultJson = ?JSON_DECODE(ResultBody),
             {InnerJson} = lists:nth(1, ResultJson),
             couch_util:get_value(<<"ok">>, InnerJson, undefined)
+        end).
+
+should_send_headers_for_downloading_docs_if_query_param_passed(Url) ->
+    ?_assertEqual("attachment",
+        begin
+            {ok, _, _, _} = create_doc(Url, "testdoc"),
+            {ok, _, Headers, _} = test_request:get(Url ++ "/testdoc?download=true"),
+            proplists:get_value("Content-Disposition", Headers)
+        end).
+
+should_not_send_headers_for_downloading_docs_if_no_query_param_passed(Url) ->
+    ?_assertEqual(undefined,
+        begin
+            {ok, _, _, _} = create_doc(Url, "testdoc"),
+            {ok, _, Headers, _} = test_request:get(Url ++ "/testdoc"),
+            proplists:get_value("Content-Disposition", Headers)
+        end).
+
+should_send_headers_for_downloading_ddocs_if_query_param_passed(Url) ->
+    ?_assertEqual("attachment",
+        begin
+            {ok, _, _, _} = create_doc(Url, "_design/testdoc"),
+            {ok, _, Headers, _} = test_request:get(Url ++ "/_design/testdoc?download=true"),
+            proplists:get_value("Content-Disposition", Headers)
+        end).
+
+should_not_send_headers_for_downloading_ddocs_if_no_query_param_passed(Url) ->
+    ?_assertEqual(undefined,
+        begin
+            {ok, _, _, _} = create_doc(Url, "_design/testdoc"),
+            {ok, _, Headers, _} = test_request:get(Url ++ "/_design/testdoc"),
+            proplists:get_value("Content-Disposition", Headers)
         end).

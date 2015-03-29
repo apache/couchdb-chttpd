@@ -763,10 +763,15 @@ send_doc(Req, Doc, Options) ->
         DiskEtag = couch_httpd:doc_etag(Doc),
         % output etag only when we have no meta
         chttpd:etag_respond(Req, DiskEtag, fun() ->
-            send_doc_efficiently(Req, Doc, [{"Etag", DiskEtag}], Options)
+            Headers = couch_httpd_db:maybe_add_content_disposition_headers([
+                {"Etag", DiskEtag}
+            ], Options),
+            send_doc_efficiently(Req, Doc, Headers, Options)
         end);
     _ ->
-        send_doc_efficiently(Req, Doc, [], Options)
+        Headers = couch_httpd_db:maybe_add_content_disposition_headers([],
+            Options),
+        send_doc_efficiently(Req, Doc, Headers, Options)
     end.
 
 send_doc_efficiently(Req, #doc{atts=[]}=Doc, Headers, Options) ->
@@ -1298,6 +1303,9 @@ parse_doc_query(Req) ->
             Args#doc_query_args{update_type=interactive_edit};
         {"att_encoding_info", "true"} ->
             Options = [att_encoding_info | Args#doc_query_args.options],
+            Args#doc_query_args{options=Options};
+        {"download", "true"} ->
+            Options = [download | Args#doc_query_args.options],
             Args#doc_query_args{options=Options};
         {"r", R} ->
             Options = [{r,R} | Args#doc_query_args.options],
