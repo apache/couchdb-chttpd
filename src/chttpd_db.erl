@@ -1302,6 +1302,9 @@ parse_doc_query(Req) ->
         {"r", R} ->
             Options = [{r,R} | Args#doc_query_args.options],
             Args#doc_query_args{options=Options};
+        {"is_r_met", "true"} ->
+            Options = [is_r_met | Args#doc_query_args.options],
+            Args#doc_query_args{options=Options};
         {"w", W} ->
             Options = [{w,W} | Args#doc_query_args.options],
             Args#doc_query_args{options=Options};
