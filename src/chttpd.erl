@@ -19,7 +19,7 @@
     qs_value/3, qs/1, qs_json_value/3, path/1, absolute_uri/2, body_length/1,
     verify_is_server_admin/1, unquote/1, quote/1, recv/2, recv_chunked/4,
     error_info/1, parse_form/1, json_body/1, json_body_obj/1, body/1,
-    doc_etag/1, make_etag/1, etag_respond/3, etag_match/2,
+    rev_etag/1, doc_etag/1, make_etag/0, make_etag/1, etag_respond/3, etag_match/2,
     partition/1, serve_file/3, serve_file/4,
     server_header/0, start_chunked_response/3,send_chunk/2,
     start_response_length/4, send/2, start_json_response/2,
@@ -535,7 +535,15 @@ json_body_obj(Httpd) ->
 
 
 doc_etag(#doc{revs={Start, [DiskRev|_]}}) ->
-    "\"" ++ ?b2l(couch_doc:rev_to_str({Start, DiskRev})) ++ "\"".
+    rev_etag({Start, DiskRev}).
+
+rev_etag({Start, DiskRev}) ->
+    Rev = couch_doc:rev_to_str({Start, DiskRev}),
+    <<"\"", Rev/binary, "\"">>.
+
+make_etag() ->
+    Uuid = couch_uuids:new(),
+    <<"\"", Uuid/binary, "\"">>.
 
 make_etag(Term) ->
     <<SigInt:128/integer>> = erlang:md5(term_to_binary(Term)),

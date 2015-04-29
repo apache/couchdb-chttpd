@@ -89,7 +89,7 @@ show_etag(#httpd{user_ctx=UserCtx}=Req, Doc, DDoc, More) ->
         nil -> nil;
         Doc -> chttpd:doc_etag(Doc)
     end,
-    couch_httpd:make_etag({couch_httpd:doc_etag(DDoc), DocPart, Accept,
+    chttpd:make_etag({chttpd:doc_etag(DDoc), DocPart, Accept,
         UserCtx#user_ctx.roles, More}).
 
 % /db/_design/foo/update/bar/docid
@@ -194,7 +194,7 @@ handle_view_list(Req, Db, DDoc, LName, {ViewDesignName, ViewName}, Keys) ->
     couch_util:get_nested_json_value(DDoc#doc.body, [<<"lists">>, LName]),
     {ok, VDoc} = ddoc_cache:open(Db#db.name, <<"_design/", ViewDesignName/binary>>),
     CB = fun couch_mrview_show:list_cb/2,
-    Etag = couch_uuids:new(),
+    Etag = chttpd:make_etag(),
     QueryArgs = couch_mrview_http:parse_params(Req, Keys),
     Options = [{user_ctx, Req#httpd.user_ctx}],
     chttpd:etag_respond(Req, Etag, fun() ->

@@ -673,7 +673,7 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
     {accepted, NewRev} ->
         HttpCode = 202
     end,
-    send_json(Req, HttpCode, [{"Etag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewRev)) ++ "\""}], {[
+    send_json(Req, HttpCode, [{"Etag", chttpd:rev_etag(NewRev)}], {[
         {ok, true},
         {id, DocId},
         {rev, couch_doc:rev_to_str(NewRev)}
@@ -751,7 +751,7 @@ db_doc_req(#httpd{method='COPY', user_ctx=Ctx}=Req, Db, SourceDocId) ->
     % respond
     {PartRes} = update_doc_result_to_json(TargetDocId, {ok, NewTargetRev}),
     send_json(Req, HttpCode,
-        [{"Etag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewTargetRev)) ++ "\""}],
+        [{"Etag", chttpd:rev_etag(NewTargetRev)}],
         {[{ok, true}] ++ PartRes});
 
 db_doc_req(Req, _Db, _DocId) ->
@@ -760,7 +760,7 @@ db_doc_req(Req, _Db, _DocId) ->
 send_doc(Req, Doc, Options) ->
     case Doc#doc.meta of
     [] ->
-        DiskEtag = couch_httpd:doc_etag(Doc),
+        DiskEtag = chttpd:doc_etag(Doc),
         % output etag only when we have no meta
         chttpd:etag_respond(Req, DiskEtag, fun() ->
             send_doc_efficiently(Req, Doc, [{"Etag", DiskEtag}], Options)
@@ -928,7 +928,7 @@ update_doc(Db, DocId, #doc{deleted=Deleted}=Doc, Options) ->
         Accepted = true
     end,
     NewRevStr = couch_doc:rev_to_str(NewRev),
-    Etag = <<"\"", NewRevStr/binary, "\"">>,
+    Etag = chttpd:rev_etag(NewRev),
     Status = case {Accepted, Deleted} of
         {true, _} ->
             accepted;
