@@ -553,7 +553,9 @@ make_etag(Term) ->
 att_etag(#doc{} = Doc, Att) ->
     case couch_att:fetch([md5], Att) of
         <<>> -> doc_etag(Doc);
-        Md5 -> base64:encode(Md5)
+        Md5 ->
+            Encoded = base64:encode(Md5),
+            <<"\"", Encoded/binary, "\"">>
     end.
 
 etag_match(Req, CurrentEtag) when is_binary(CurrentEtag) ->
