@@ -315,12 +315,8 @@ replication_uri(Type, PostProps) ->
     {Props} ->
         couch_util:get_value(<<"url">>, Props);
     Else ->
-        escape_dbname(Else)
+        iolist_to_binary(quote(Else))
     end.
-
-escape_dbname(DbName) ->
-    re:replace(DbName, "/", "%2f", [global, {return, binary}]).
-
 
 is_http(<<"http://", _/binary>>) ->
     true;
