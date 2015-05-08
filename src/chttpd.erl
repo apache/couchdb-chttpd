@@ -305,7 +305,7 @@ fix_uri(Req, Props, Type) ->
         true ->
             Props;
         false ->
-            Uri = make_uri(Req,replication_uri(Type, Props)),
+            Uri = make_uri(Req, Uri0),
             [{Type,Uri}|proplists:delete(Type,Props)]
         end
     end.
@@ -315,8 +315,12 @@ replication_uri(Type, PostProps) ->
     {Props} ->
         couch_util:get_value(<<"url">>, Props);
     Else ->
-        Else
+        escape_dbname(Else)
     end.
+
+escape_dbname(DbName) ->
+    re:replace(DbName, "/", "%2f", [global, {return, binary}]).
+
 
 is_http(<<"http://", _/binary>>) ->
     true;
