@@ -71,7 +71,7 @@ handle_doc_show(Req, Db, DDoc, ShowName, Doc, DocId) ->
     %% Will throw an exception if the _show handler is missing
     couch_util:get_nested_json_value(DDoc#doc.body, [<<"shows">>, ShowName]),
     % get responder for ddoc/showname
-    CurrentEtag = show_etag(Req, Doc, DDoc, []),
+    CurrentEtag = show_etag(Req, Doc, DDoc, lists:usort(chttpd:qs(Req))),
     chttpd:etag_respond(Req, CurrentEtag, fun() ->
         JsonReq = chttpd_external:json_req_obj(Req, Db, DocId),
         JsonDoc = couch_query_servers:json_doc(Doc),
