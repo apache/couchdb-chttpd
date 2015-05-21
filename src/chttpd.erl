@@ -21,6 +21,7 @@
     error_info/1, parse_form/1, json_body/1, json_body_obj/1, body/1,
     rev_etag/1, doc_etag/1, make_etag/0, make_etag/1,
     att_etag/2, etag_respond/3, etag_match/2,
+    set_response_headers/2, response_headers/1, replace_header/3,
     partition/1, serve_file/3, serve_file/4,
     server_header/0, start_chunked_response/3,send_chunk/2,
     start_response_length/4, send/2, start_json_response/2,
@@ -958,3 +959,27 @@ stack_hash(Stack) ->
 
 with_default(undefined, Default) -> Default;
 with_default(Value, _) -> Value.
+
+response_headers(#delayed_resp{headers = Headers}) ->
+    Headers.
+
+set_response_headers(#delayed_resp{} = Resp , Headers) ->
+    Resp#delayed_resp{headers = Headers}.
+
+replace_header(Headers, Key, Value) ->
+    replace_header(Headers, normalize(Key), Key, Value, []).
+
+replace_header([{K, V}|Rest], NKey, Key, Value, Acc) ->
+    case normalize(K) == NKey of
+        true -> [{Key, Value}|Acc] ++ Rest;
+        false -> replace_header(Rest, NKey, Key, Value, [{K, V}|Acc])
+    end;
+replace_header([], NKey, Key, Value, Acc) ->
+    [{Key, Value}|Acc].
+
+normalize(K) when is_list(K) ->
+    string:to_lower(K);
+normalize(K) when is_atom(K) ->
+    normalize(atom_to_list(K));
+normalize(K) when is_binary(K) ->
+    normalize(binary_to_list(K)).
