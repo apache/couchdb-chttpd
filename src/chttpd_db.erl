@@ -547,11 +547,7 @@ all_docs_view(Req, Db, Keys, OP) ->
     Args0 = couch_mrview_http:parse_params(Req, Keys),
     Args1 = Args0#mrargs{view_type=map},
     Args2 = couch_mrview_util:validate_args(Args1),
-    Args3 = set_namespace(OP, Args2),
-    ETagFun = fun(Sig, Acc0) ->
-        couch_mrview_http:check_view_etag(Sig, Acc0, Req)
-    end,
-    Args = Args3#mrargs{preflight_fun=ETagFun},
+    Args = set_namespace(OP, Args2),
     Options = [{user_ctx, Req#httpd.user_ctx}],
     Etag = couch_mrview_util:make_etag(Args, Keys),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->

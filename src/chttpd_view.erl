@@ -37,11 +37,7 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
 
 
 design_doc_view(Req, Db, DDoc, ViewName, Keys) ->
-    Args0 = couch_mrview_http:parse_params(Req, Keys),
-    ETagFun = fun(Sig, Acc0) ->
-        couch_mrview_http:check_view_etag(Sig, Acc0, Req)
-    end,
-    Args = Args0#mrargs{preflight_fun=ETagFun},
+    Args = couch_mrview_http:parse_params(Req, Keys),
     Etag = couch_mrview_util:make_etag(Args, Keys),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
         VAcc0 = #vacc{db = Db, req = Req, etag = Etag},
