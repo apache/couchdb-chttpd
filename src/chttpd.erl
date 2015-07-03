@@ -111,6 +111,8 @@ start_link(Name, Options) ->
     ServerOptsCfg = config:get("chttpd", "server_options", "[]"),
     {ok, ServerOpts} = couch_util:parse_term(ServerOptsCfg),
     Options2 = lists:keymerge(1, lists:sort(Options1), lists:sort(ServerOpts)),
+    chttpd_handler:build(),
+    chttpd_handler:url_handler("x"),
     case mochiweb_http:start(Options2) of
     {ok, Pid} ->
         {ok, Pid};
@@ -208,7 +210,7 @@ handle_request(MochiReq0) ->
         not_preflight ->
             case authenticate_request(HttpReq, AuthenticationFuns) of
             #httpd{} = Req ->
-                HandlerFun = url_handler(HandlerKey),
+                HandlerFun = chttpd_handler:url_handler(HandlerKey),
                 HandlerFun(chttpd_auth_request:authorize_request(possibly_hack(Req)));
             Response ->
                 Response
@@ -362,23 +364,6 @@ authenticate_request(Response, _AuthFuns) ->
 
 increment_method_stats(Method) ->
     couch_stats:increment_counter([couchdb, httpd_request_methods, Method]).
-
-url_handler("") ->              fun chttpd_misc:handle_welcome_req/1;
-url_handler("favicon.ico") ->   fun chttpd_misc:handle_favicon_req/1;
-url_handler("_utils") ->        fun chttpd_misc:handle_utils_dir_req/1;
-url_handler("_all_dbs") ->      fun chttpd_misc:handle_all_dbs_req/1;
-url_handler("_active_tasks") -> fun chttpd_misc:handle_task_status_req/1;
-url_handler("_node") ->         fun chttpd_misc:handle_node_req/1;
-url_handler("_reload_query_servers") -> fun chttpd_misc:handle_reload_query_servers_req/1;
-url_handler("_replicate") ->    fun chttpd_misc:handle_replicate_req/1;
-url_handler("_uuids") ->        fun chttpd_misc:handle_uuids_req/1;
-url_handler("_session") ->      fun chttpd_auth:handle_session_req/1;
-url_handler("_oauth") ->        fun couch_httpd_oauth:handle_oauth_req/1;
-url_handler("_up") ->           fun chttpd_misc:handle_up_req/1;
-url_handler("_membership") ->   fun mem3_httpd:handle_membership_req/1;
-url_handler("_db_updates") ->   fun global_changes_httpd:handle_global_changes_req/1;
-url_handler("_cluster_setup") -> fun setup_httpd:handle_setup_req/1;
-url_handler(_) ->               fun chttpd_db:handle_request/1.
 
 db_url_handlers() ->
     [
