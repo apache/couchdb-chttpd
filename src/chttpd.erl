@@ -101,7 +101,7 @@ start_link(https) ->
     start_link(https, Options).
 
 start_link(Name, Options) ->
-    IP = with_default(config:get("chttpd", "bind_address"), any),
+    IP = couch_util:bind_address("chttpd", any),
 
     Options1 = Options ++ [
         {loop, fun ?MODULE:handle_request/1},
@@ -991,6 +991,3 @@ stack_trace_id(Stack) ->
 
 stack_hash(Stack) ->
     erlang:crc32(term_to_binary(Stack)).
-
-with_default(undefined, Default) -> Default;
-with_default(Value, _) -> Value.

@@ -30,7 +30,8 @@ subscribe() ->
     ok = config:listen_for_changes(?MODULE, Settings),
     ok.
 
-handle_config_change("chttpd", "bind_address", Value, _, Settings) ->
+handle_config_change("chttpd", "bind_address", Value0, _, Settings) ->
+    Value = couch_util:bind_address("chttpd", Value0),
     maybe_replace(bind_address, Value, Settings);
 handle_config_change("chttpd", "port", Value, _, Settings) ->
     maybe_replace(port, Value, Settings);
