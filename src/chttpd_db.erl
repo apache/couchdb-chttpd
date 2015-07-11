@@ -63,7 +63,8 @@ handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
 
 handle_changes_req(#httpd{method='POST'}=Req, Db) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    handle_changes_req1(Req, Db);
+    ReqBody = chttpd:body(Req),
+    handle_changes_req1(Req#httpd{req_body=ReqBody}, Db);
 handle_changes_req(#httpd{method='GET'}=Req, Db) ->
     handle_changes_req1(Req, Db);
 handle_changes_req(#httpd{path_parts=[_,<<"_changes">>]}=Req, _Db) ->
