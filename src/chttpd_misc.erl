@@ -156,6 +156,8 @@ handle_replicate_req(#httpd{method='POST', user_ctx=Ctx} = Req) ->
         send_json(Req, 500, {[{error, Type}, {reason, Details}]});
     {error, not_found} ->
         send_json(Req, 404, {[{error, not_found}]});
+    {bad_request, Reason} ->
+        send_json(Req, 400, {[{error, Reason}]});
     {error, Reason} ->
         try
             send_json(Req, 500, {[{error, Reason}]})
