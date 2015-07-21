@@ -97,7 +97,7 @@ handle_all_dbs_req(#httpd{method='GET'}=Req) ->
     %% shard_db is not sharded but mem3:shards treats it as an edge case
     %% so it can be pushed thru fabric
     {ok, Info} = fabric:get_db_info(ShardDbName),
-    Etag = couch_httpd:make_etag({Info}),
+    Etag = chttpd:make_etag({Info}),
     Options = [{user_ctx, Req#httpd.user_ctx}],
     {ok, Resp} = chttpd:etag_respond(Req, Etag, fun() ->
         {ok, Resp} = chttpd:start_delayed_json_response(Req, 200, [{"Etag",Etag}]),

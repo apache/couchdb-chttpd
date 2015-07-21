@@ -71,7 +71,7 @@ handle_doc_show(Req, Db, DDoc, ShowName, Doc, DocId) ->
     %% Will throw an exception if the _show handler is missing
     couch_util:get_nested_json_value(DDoc#doc.body, [<<"shows">>, ShowName]),
     % get responder for ddoc/showname
-    CurrentEtag = show_etag(Req, Doc, DDoc, []),
+    CurrentEtag = couch_mrview_show:show_etag(Req, Doc, DDoc, []),
     chttpd:etag_respond(Req, CurrentEtag, fun() ->
         JsonReq = chttpd_external:json_req_obj(Req, Db, DocId),
         JsonDoc = couch_query_servers:json_doc(Doc),
@@ -82,15 +82,6 @@ handle_doc_show(Req, Db, DDoc, ShowName, Doc, DocId) ->
         chttpd_external:send_external_response(Req, JsonResp)
     end).
 
-
-show_etag(#httpd{user_ctx=UserCtx}=Req, Doc, DDoc, More) ->
-    Accept = chttpd:header_value(Req, "Accept"),
-    DocPart = case Doc of
-        nil -> nil;
-        Doc -> chttpd:doc_etag(Doc)
-    end,
-    couch_httpd:make_etag({couch_httpd:doc_etag(DDoc), DocPart, Accept,
-        UserCtx#user_ctx.roles, More}).
 
 % /db/_design/foo/update/bar/docid
 % updates a doc based on a request
@@ -194,10 +185,10 @@ handle_view_list(Req, Db, DDoc, LName, {ViewDesignName, ViewName}, Keys) ->
     couch_util:get_nested_json_value(DDoc#doc.body, [<<"lists">>, LName]),
     {ok, VDoc} = ddoc_cache:open(Db#db.name, <<"_design/", ViewDesignName/binary>>),
     CB = fun couch_mrview_show:list_cb/2,
-    Etag = couch_uuids:new(),
+    Etag = couch_mrview_show:show_etag(Req, VDoc, DDoc, []),
     QueryArgs = couch_mrview_http:parse_params(Req, Keys),
     Options = [{user_ctx, Req#httpd.user_ctx}],
-    chttpd:etag_respond(Req, Etag, fun() ->
+    couch_httpd:etag_maybe(Req, fun() ->
         couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
             Acc = #lacc{
                 lname = LName,
@@ -249,4 +240,3 @@ apply_etag({ExternalResponse}, CurrentEtag) ->
             Field
         end || Field <- ExternalResponse]}
     end.
-

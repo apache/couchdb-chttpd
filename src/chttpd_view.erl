@@ -24,36 +24,23 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
         QueryArg = couch_mrview_http:parse_params(Query, undefined, Args1),
         couch_mrview_util:validate_args(QueryArg)
     end, Queries),
-    {ok, Resp2} = couch_httpd:etag_maybe(Req, fun() ->
-        VAcc0 = #vacc{db=Db, req=Req, prepend="\r\n"},
-        %% TODO: proper calculation of etag
-        Etag = couch_uuids:new(),
-        Headers = [{"ETag", Etag}],
-        FirstChunk = "{\"results\":[",
-        {ok, Resp0} = chttpd:start_delayed_json_response(VAcc0#vacc.req, 200, Headers, FirstChunk),
-        VAcc1 = VAcc0#vacc{resp=Resp0},
-        VAcc2 = lists:foldl(fun(Args, Acc0) ->
-            {ok, Acc1} = fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, Acc0, Args),
-            Acc1
-        end, VAcc1, ArgQueries),
-        {ok, Resp1} = chttpd:send_delayed_chunk(VAcc2#vacc.resp, "\r\n]}"),
-        {ok, Resp2} = chttpd:end_delayed_json_response(Resp1),
-        {ok, VAcc2#vacc{resp=Resp2}}
-    end),
-    case is_record(Resp2, vacc) of
-        true -> {ok, Resp2#vacc.resp};
-        _ -> {ok, Resp2}
-    end.
+    VAcc0 = #vacc{db=Db, req=Req, prepend="\r\n"},
+    FirstChunk = "{\"results\":[",
+    {ok, Resp0} = chttpd:start_delayed_json_response(VAcc0#vacc.req, 200, [], FirstChunk),
+    VAcc1 = VAcc0#vacc{resp=Resp0},
+    VAcc2 = lists:foldl(fun(Args, Acc0) ->
+        {ok, Acc1} = fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, Acc0, Args),
+        Acc1
+    end, VAcc1, ArgQueries),
+    {ok, Resp1} = chttpd:send_delayed_chunk(VAcc2#vacc.resp, "\r\n]}"),
+    chttpd:end_delayed_json_response(Resp1).
 
 
 design_doc_view(Req, Db, DDoc, ViewName, Keys) ->
-    Args0 = couch_mrview_http:parse_params(Req, Keys),
-    ETagFun = fun(Sig, Acc0) ->
-        couch_mrview_http:check_view_etag(Sig, Acc0, Req)
-    end,
-    Args = Args0#mrargs{preflight_fun=ETagFun},
+    Args = couch_mrview_http:parse_params(Req, Keys),
+    Etag = couch_mrview_util:make_etag(Args, Keys),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
-        VAcc0 = #vacc{db=Db, req=Req},
+        VAcc0 = #vacc{db = Db, req = Req, etag = Etag},
         fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, VAcc0, Args)
     end),
     case is_record(Resp, vacc) of

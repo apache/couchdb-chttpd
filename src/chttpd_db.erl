@@ -547,14 +547,11 @@ all_docs_view(Req, Db, Keys, OP) ->
     Args0 = couch_mrview_http:parse_params(Req, Keys),
     Args1 = Args0#mrargs{view_type=map},
     Args2 = couch_mrview_util:validate_args(Args1),
-    Args3 = set_namespace(OP, Args2),
-    ETagFun = fun(Sig, Acc0) ->
-        couch_mrview_http:check_view_etag(Sig, Acc0, Req)
-    end,
-    Args = Args3#mrargs{preflight_fun=ETagFun},
+    Args = set_namespace(OP, Args2),
     Options = [{user_ctx, Req#httpd.user_ctx}],
+    Etag = couch_mrview_util:make_etag(Args, Keys),
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
-        VAcc0 = #vacc{db=Db, req=Req},
+        VAcc0 = #vacc{db = Db, req = Req, etag = Etag},
         fabric:all_docs(Db, Options, fun couch_mrview_http:view_cb/2, VAcc0, Args)
     end),
     case is_record(Resp, vacc) of
@@ -673,7 +670,7 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
     {accepted, NewRev} ->
         HttpCode = 202
     end,
-    send_json(Req, HttpCode, [{"Etag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewRev)) ++ "\""}], {[
+    send_json(Req, HttpCode, [{"Etag", chttpd:rev_etag(NewRev)}], {[
         {ok, true},
         {id, DocId},
         {rev, couch_doc:rev_to_str(NewRev)}
@@ -751,7 +748,7 @@ db_doc_req(#httpd{method='COPY', user_ctx=Ctx}=Req, Db, SourceDocId) ->
     % respond
     {PartRes} = update_doc_result_to_json(TargetDocId, {ok, NewTargetRev}),
     send_json(Req, HttpCode,
-        [{"Etag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewTargetRev)) ++ "\""}],
+        [{"Etag", chttpd:rev_etag(NewTargetRev)}],
         {[{ok, true}] ++ PartRes});
 
 db_doc_req(Req, _Db, _DocId) ->
@@ -760,7 +757,7 @@ db_doc_req(Req, _Db, _DocId) ->
 send_doc(Req, Doc, Options) ->
     case Doc#doc.meta of
     [] ->
-        DiskEtag = couch_httpd:doc_etag(Doc),
+        DiskEtag = chttpd:doc_etag(Doc),
         % output etag only when we have no meta
         chttpd:etag_respond(Req, DiskEtag, fun() ->
             send_doc_efficiently(Req, Doc, [{"Etag", DiskEtag}], Options)
@@ -928,7 +925,7 @@ update_doc(Db, DocId, #doc{deleted=Deleted}=Doc, Options) ->
         Accepted = true
     end,
     NewRevStr = couch_doc:rev_to_str(NewRev),
-    Etag = <<"\"", NewRevStr/binary, "\"">>,
+    Etag = chttpd:rev_etag(NewRev),
     Status = case {Accepted, Deleted} of
         {true, _} ->
             accepted;
@@ -1011,13 +1008,11 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
     [] ->
         throw({not_found, "Document is missing attachment"});
     [Att] ->
-        [Type, Enc, DiskLen, AttLen, Md5] = couch_att:fetch([type, encoding, disk_len, att_len, md5], Att),
+        [Type, Enc, DiskLen, AttLen] =
+            couch_att:fetch([type, encoding, disk_len, att_len], Att),
         Refs = monitor_attachments(Att),
         try
-        Etag = case Md5 of
-            <<>> -> chttpd:doc_etag(Doc);
-            _ -> "\"" ++ ?b2l(base64:encode(Md5)) ++ "\""
-        end,
+        Etag = chttp:att_etag(Doc, Att),
         ReqAcceptsAttEnc = lists:member(
            atom_to_list(Enc),
            couch_httpd:accepted_encodings(Req)
