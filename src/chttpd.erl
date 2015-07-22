@@ -315,7 +315,7 @@ replication_uri(Type, PostProps) ->
     {Props} ->
         couch_util:get_value(<<"url">>, Props);
     Else ->
-        iolist_to_binary(quote_path(Else))
+        iolist_to_binary(quote(Else))
     end.
 
 is_http(<<"http://", _/binary>>) ->
@@ -485,9 +485,6 @@ unquote(UrlEncodedString) ->
 
 quote(UrlDecodedString) ->
     mochiweb_util:quote_plus(UrlDecodedString).
-
-quote_path(Path) ->
-    re:replace(Path, "/", "%2F", [global, {return, list}]).
 
 parse_form(#httpd{mochi_req=MochiReq}) ->
     mochiweb_multipart:parse_form(MochiReq).
