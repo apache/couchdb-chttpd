@@ -30,18 +30,21 @@ provider(App, Module) ->
        App, chttpd_handlers, Module).
 
 url_handler(HandlerKey, DefaultFun) ->
+    ok = ensure_enabled(HandlerKey),
     case collect(url_handler, [HandlerKey]) of
         [HandlerFun] -> HandlerFun;
         [] -> DefaultFun
     end.
 
 db_handler(HandlerKey, DefaultFun) ->
+    ok = ensure_enabled(HandlerKey),
     case collect(db_handler, [HandlerKey]) of
         [HandlerFun] -> HandlerFun;
         [] -> DefaultFun
     end.
 
 design_handler(HandlerKey, DefaultFun) ->
+    ok = ensure_enabled(HandlerKey),
     case collect(design_handler, [HandlerKey]) of
         [HandlerFun] -> HandlerFun;
         [] -> DefaultFun
@@ -50,6 +53,20 @@ design_handler(HandlerKey, DefaultFun) ->
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
+
+is_disabled(KeyBin) ->
+    BlacklistConfig = config:get("chttpd", "url_handler_blacklist", []),
+    {ok, Blacklist} = couch_util:parse_term(BlacklistConfig),
+    Key = binary_to_list(KeyBin),
+    lists:member(Key, Blacklist).
+
+ ensure_enabled(Key) ->
+    case is_disabled(Key) of
+      true ->
+        throw("The URL endpoint " ++ Key ++ "has been disabled.");
+      false ->
+        ok
+    end.
 
 collect(Func, Args) ->
     Results = do_apply(Func, Args, [ignore_providers]),
