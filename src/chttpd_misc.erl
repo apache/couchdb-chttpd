@@ -329,7 +329,7 @@ flush(Node, Req) ->
 % because it's not couch trunk
 handle_system_req(Req) ->
     Other = erlang:memory(system) - lists:sum([X || {_,X} <-
-        erlang:memory([atom, code, binary, ets])]),
+        erlang:memory([atom, code, binary, ets, total])]),
     Memory = [{other, Other} | erlang:memory([atom, atom_used, processes,
         processes_used, binary, code, ets])],
     {NumberOfGCs, WordsReclaimed, _} = statistics(garbage_collection),
