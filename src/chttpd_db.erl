@@ -225,15 +225,15 @@ maybe_flush_changes_feed(Acc0, Data, Len) ->
     },
     {ok, Acc}.
 
-handle_compact_req(#httpd{method='POST'}=Req, Db) ->
-    case Req#httpd.path_parts of
-        [_DbName, <<"_compact">>] ->
-            ok = couch_db:check_is_admin(Db),
-            couch_httpd:validate_ctype(Req, "application/json"),
-            _ = couch_httpd:body(Req),
-            fabric:compact_db_all_nodes(Db#db.name),
-            send_json(Req, 202, {[{ok, true}]});
-    end;
+
+handle_compact_req(#httpd{
+        method='POST', path_parts=[_DbName, <<"_compact">>]
+    }=Req, Db) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
+    ok = couch_db:check_is_admin(Db),
+    couch_httpd:body(Req),
+    fabric:compact_db(Db#db.name),
+    send_json(Req, 202, {[{ok, true}]});
 
 handle_compact_req(Req, _Db) ->
     send_method_not_allowed(Req, "POST").
