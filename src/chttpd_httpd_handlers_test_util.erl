@@ -26,11 +26,11 @@ start(App, Apps) ->
     wait_handlers(App),
     Ctx.
 
-setup("mocked") ->
+setup(mocked) ->
     fun setup_mocked/1;
-setup("not_mocked") ->
+setup(not_mocked) ->
     fun setup_not_mocked/1;
-setup("skip") ->
+setup(skip) ->
     fun(_) -> undefined end.
 
 setup_mocked({Endpoint, {_Path, Module, Function}}) ->
@@ -58,12 +58,12 @@ endpoints_test(App, Module, Apps) ->
             %% we use instantiator to postpone test instantiation
             %% so we can detect endpoint overrides
             fun(_) -> make_tests(App, Module, [
-                    {"mocked", url_handler},
-                    {"mocked", db_handler},
-                    {"mocked", design_handler},
-                    {"not_mocked", url_handler},
-                    {"not_mocked", db_handler},
-                    {"not_mocked", design_handler}
+                    {mocked, url_handler},
+                    {mocked, db_handler},
+                    {mocked, design_handler},
+                    {not_mocked, url_handler},
+                    {not_mocked, db_handler},
+                    {not_mocked, design_handler}
                 ])
             end
         }
@@ -74,12 +74,12 @@ check_dynamic_endpoints(Setup, EndpointType, App, Module) ->
     TestMessage = "Checking '"
             ++ atom_to_list(App) ++ " -- "
             ++ atom_to_list(EndpointType)
-            ++ "' [" ++ Setup ++ "] dynamic endpoints",
+            ++ "' [" ++ atom_to_list(Setup) ++ "] dynamic endpoints",
     {
         TestMessage, [
             make_test_case(Setup, EndpointType, Spec) || Spec <- Specs
         ] ++ [
-            make_test_case("skip", EndpointType, Spec) || Spec <- Skips
+            make_test_case(skip, EndpointType, Spec) || Spec <- Skips
         ]
     }.
 
@@ -101,9 +101,9 @@ make_tests(App, Module, Casses) ->
             || {Setup, EndpointType} <- Casses
     ].
 
-select_test("mocked") -> fun ensure_called/2;
-select_test("not_mocked") -> fun verify_we_fail_if_missing/2;
-select_test("skip") -> fun ensure_skip_overridden/2.
+select_test(mocked) -> fun ensure_called/2;
+select_test(not_mocked) -> fun verify_we_fail_if_missing/2;
+select_test(skip) -> fun ensure_skip_overridden/2.
 
 mock_handler(url_handler = Endpoint, M, F) ->
     meck:expect(M, F, fun(X) -> {return, Endpoint, X} end),
