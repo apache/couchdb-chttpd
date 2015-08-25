@@ -21,6 +21,11 @@
 %%%  Test environment defintions
 %%%=========================================================================
 
+start(App, Apps) ->
+    Ctx = test_util:start_couch(Apps),
+    wait_handlers(App),
+    Ctx.
+
 setup("mocked") ->
     fun setup_mocked/1;
 setup("not_mocked") ->
@@ -48,7 +53,7 @@ endpoints_test(App, Module, Apps) ->
         "Checking dynamic endpoints",
         {
             setup,
-            fun() -> test_util:start_couch(Apps) end,
+            fun() -> start(App, Apps) end,
             fun test_util:stop/1,
             %% we use instantiator to postpone test instantiation
             %% so we can detect endpoint overrides
@@ -184,3 +189,12 @@ get_handlers(EndpointType, Module) ->
 
 is_active(EndpointType, {Path, _Module, _Function} = Spec) ->
     get_active_handler(EndpointType, Path) == Spec.
+
+wait_handlers(App) ->
+    Handle = couch_epi:get_handle(chttpd_handlers),
+    test_util:wait(fun() ->
+        case couch_epi:is_defined_by_app(Handle, App, url_handler, 1) of
+            false -> wait;
+            _ -> true
+        end
+    end).
