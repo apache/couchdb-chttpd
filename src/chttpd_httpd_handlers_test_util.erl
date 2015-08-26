@@ -170,7 +170,10 @@ handler(EndpointType, HandlerKey) ->
     chttpd_handlers:EndpointType(HandlerKey, default_handler(EndpointType)).
 
 get_active_handler(EndpointType, HandlerKey) ->
-    Info = erlang:fun_info(handler(EndpointType, HandlerKey)),
+    fun2spec(HandlerKey, handler(EndpointType, HandlerKey)).
+
+fun2spec(HandlerKey, Fun) ->
+    Info = erlang:fun_info(Fun),
     {
          HandlerKey,
          proplists:get_value(module, Info),
@@ -182,10 +185,11 @@ default_handler(db_handler) -> fun chttpd_db:db_req/2;
 default_handler(design_handler) -> fun chttpd_db:bad_action_req/3.
 
 get_handlers(EndpointType, Module) ->
-    Handlers = Module:handlers(EndpointType),
+    Handlers = chttpd_handlers:handlers(Module, EndpointType),
+    HandlerSpecs = [fun2spec(HandlerKey, Fun) || {HandlerKey, Fun} <- Handlers],
     lists:partition(fun(Spec) ->
         is_active(EndpointType, Spec)
-    end, Handlers).
+    end, HandlerSpecs).
 
 is_active(EndpointType, {Path, _Module, _Function} = Spec) ->
     get_active_handler(EndpointType, Path) == Spec.

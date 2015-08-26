@@ -74,3 +74,11 @@ endpoints(design_handler) ->
         <<"_rewrite">>
     ].
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+chttpd_endpoints_test_() ->
+    Apps = [couch_epi, chttpd],
+    chttpd_httpd_handlers_test_util:endpoints_test(chttpd, ?MODULE, Apps).
+
+-endif.
