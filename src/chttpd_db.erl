@@ -407,7 +407,15 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
         true  -> [all_or_nothing|Options];
         _ -> Options
         end,
-        case fabric:update_docs(Db, Docs, Options2) of
+        couch_log:debug("chttpd_db: update_docs wellcome. Going to store attachment in external store",[]),
+        case fabric_attachments_handler:externalize_att(Db) of
+            "true" ->
+                NewDocs = fabric_attachments_handler:inline_att_store(Db,fabric:docs(Docs));
+            "false" ->
+                couch_log:debug("Store inline attachmets in object store disabled",[]),
+                NewDocs = Docs
+        end,
+        case fabric:update_docs(Db, NewDocs, Options2) of
         {ok, Results} ->
             % output the results
             DocResults = lists:zipwith(fun update_doc_result_to_json/2,
@@ -733,7 +741,17 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
     NewDoc = Doc#doc{
         atts = UpdatedAtts ++ OldAtts2
     },
-    case fabric:update_doc(Db, NewDoc, Options) of
+    couch_log:debug("chttpd_db: couchNew doc formed including new att: formed",[]),
+    lists:foreach(fun(X) -> couch_log:debug("~p~n ~p~n",[couch_att:fetch(data, X), couch_att:fetch(name, X)]) end, NewDoc#doc.atts),
+    couch_log:debug("chttpd_db: going to call attachment handler for base64 attachments",[]),
+    case fabric_attachments_handler:externalize_att(Db) of
+        "true" ->
+            NewNewDoc = fabric_attachments_handler:inline_att_store(Db, NewDoc); %store_single_document
+		"false" ->
+            couch_log:debug("Store inline attachmets in Swift disabled",[]),
+            NewNewDoc = NewDoc
+    end,
+    case fabric:update_doc(Db, NewNewDoc, Options) of
     {ok, NewRev} ->
         HttpCode = 201;
     {accepted, NewRev} ->
@@ -1079,7 +1097,17 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
     case [A || A <- Atts, couch_att:fetch(name, A) == FileName] of
     [] ->
         throw({not_found, "Document is missing attachment"});
-    [Att] ->
+    [TmpAtt] ->
+        AttExternal = couch_att:fetch(att_external,TmpAtt),
+        couch_log:debug("chttpd_db: attachment stored in external store ~p~n",[AttExternal]),
+        case AttExternal of
+            "external" ->
+                Att = fabric_attachments_handler:inline_att_handler(get, Db, TmpAtt),
+                couch_log:debug("chtttpd_db: Got attachment from external store",[]);
+            _ ->
+                couch_log:debug("chttpd_db: Att is not stored in external store",[]),
+                Att = TmpAtt
+        end,
         [Type, Enc, DiskLen, AttLen, Md5] = couch_att:fetch([type, encoding, disk_len, att_len, md5], Att),
         Refs = monitor_attachments(Att),
         try
@@ -1127,11 +1155,19 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
             % header we'll fall back to a chunked response.
             undefined
         end,
-        AttFun = case ReqAcceptsAttEnc of
+        AttFunTmp = case ReqAcceptsAttEnc of
         false ->
             fun couch_att:foldl_decode/3;
         true ->
             fun couch_att:foldl/3
+        end,
+        case AttExternal of
+            "external" ->
+                AttFun = couch_att:fetch(data,Att),
+                couch_log:debug("chtttpd_db: Got new attachment ",[]);
+            _ ->
+                couch_log:debug("chttpd_db: not external att",[]),
+                AttFun = AttFunTmp
         end,
         chttpd:etag_respond(
             Req,
@@ -1161,7 +1197,12 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
                                     []
                             end,
                             {ok, Resp} = start_response_length(Req, 200, Headers1, Len),
-                            AttFun(Att, fun(Seg, _) -> send(Resp, Seg) end, {ok, Resp})
+                            case AttExternal of 
+                                "external" ->
+                                    send(Resp,couch_att:fetch(data, Att)), {ok, Resp};
+                                _ ->
+                                    AttFun(Att, fun(Seg, _) -> send(Resp, Seg) end, {ok, Resp})
+                            end
                     end
                 end
             end
@@ -1189,7 +1230,6 @@ db_attachment_req(#httpd{method=Method, user_ctx=Ctx}=Req, Db, DocId, FileNamePa
                 undefined -> <<"application/octet-stream">>;
                 CType -> list_to_binary(CType)
             end,
-            Data = fabric:att_receiver(Req, chttpd:body_length(Req)),
             ContentLen = case couch_httpd:header_value(Req,"Content-Length") of
                 undefined -> undefined;
                 Length -> list_to_integer(Length)
@@ -1208,14 +1248,31 @@ db_attachment_req(#httpd{method=Method, user_ctx=Ctx}=Req, Db, DocId, FileNamePa
                         "Only gzip and identity content-encodings are supported"
                     })
             end,
-            [couch_att:new([
-                {name, FileName},
-                {type, MimeType},
-                {data, Data},
-                {att_len, ContentLen},
-                {md5, get_md5_header(Req)},
-                {encoding, Encoding}
-            ])]
+            case fabric_attachments_handler:externalize_att(Db) of
+                "true" ->
+                    {Data, ExternalObjectSize, ExternalEtagMD5} = fabric_attachments_handler:normal_att_store(FileName,Db,ContentLen,MimeType,Req),
+                    [couch_att:new([
+                        {name, FileName},
+                        {type, MimeType},
+                        {data, Data},
+                        {att_len, ContentLen},
+                        {md5, get_md5_header(Req)},
+                        {encoding, Encoding},
+                        {att_external_size,ExternalObjectSize},
+                        {att_external_md5,ExternalEtagMD5},
+                        {att_external,"external"}
+                    ])];
+                "false" ->
+                    Data = fabric:att_receiver(Req, chttpd:body_length(Req)),
+                    [couch_att:new([
+                        {name, FileName},
+                        {type, MimeType},
+                        {data, Data},
+                        {att_len, ContentLen},
+                        {md5, get_md5_header(Req)},
+                        {encoding, Encoding}
+                    ])]
+            end
     end,
 
     Doc = case extract_header_rev(Req, chttpd:qs_value(Req, "rev")) of
