@@ -25,13 +25,13 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
         couch_mrview_util:validate_args(QueryArg)
     end, Queries),
     {ok, Resp2} = couch_httpd:etag_maybe(Req, fun() ->
-        VAcc0 = #vacc{db=Db, req=Req, prepend="\r\n"},
-        %% TODO: proper calculation of etag
-        Etag = [$", couch_uuids:new(), $"],
+        Etag = make_etag(Db, DDoc, ViewName, ArgQueries),
+        ok = check_etag(Etag, Req),
+        VAcc0 = #vacc{db=Db, req=Req, prepend="\r\n", etag=Etag},
         Headers = [{"ETag", Etag}],
         FirstChunk = "{\"results\":[",
         {ok, Resp0} = chttpd:start_delayed_json_response(VAcc0#vacc.req, 200, Headers, FirstChunk),
-        VAcc1 = VAcc0#vacc{resp=Resp0, etag=Etag},
+        VAcc1 = VAcc0#vacc{resp=Resp0},
         VAcc2 = lists:foldl(fun(Args, Acc0) ->
             {ok, Acc1} = fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, Acc0, Args),
             Acc1
@@ -48,12 +48,12 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
 
 design_doc_view(Req, Db, DDoc, ViewName, Keys) ->
     Args = couch_mrview_http:parse_params(Req, Keys),
-    %% TODO: proper calculation of etag
-    Etag = [$", couch_uuids:new(), $"],
     {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
+        Etag = make_etag(Db, DDoc, ViewName, Args),
+        ok = check_etag(Etag, Req),
         Max = chttpd:chunked_response_buffer_size(),
-        VAcc0 = #vacc{db=Db, req=Req, threshold=Max, etag=Etag},
-        fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, VAcc0, Args)
+        VAcc = #vacc{db=Db, req=Req, threshold=Max, etag=Etag},
+        fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, VAcc, Args)
     end),
     case is_record(Resp, vacc) of
         true -> {ok, Resp#vacc.resp};
@@ -94,3 +94,20 @@ handle_view_req(Req, _Db, _DDoc) ->
 handle_temp_view_req(Req, _Db) ->
     Msg = <<"Temporary views are not supported in CouchDB">>,
     chttpd:send_error(Req, 403, forbidden, Msg).
+
+make_etag(Db, DDoc, ViewName, Args) ->
+    DbName = Db#db.name,
+    DDocId = DDoc#doc.id,
+    {ok, ViewGroupInfo} = fabric:get_view_group_info(DbName, DDocId),
+    UpdatesPending = proplists:get_value(updates_pending, ViewGroupInfo),
+    UpdateSeq = proplists:get_value(update_seq, ViewGroupInfo),
+    Signature = proplists:get_value(signature, ViewGroupInfo),
+    PurgeSeq = proplists:get_value(purge_seq, ViewGroupInfo),
+    Term = {DbName, DDocId, ViewName, Args, UpdatesPending, UpdateSeq, Signature, PurgeSeq},
+    chttpd:make_etag(Term).
+
+check_etag(Etag, Req) ->
+    case chttpd:etag_match(Req, Etag) of
+        true -> throw({etag_match, Etag});
+        false -> ok
+    end.
