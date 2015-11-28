@@ -17,6 +17,7 @@
 
 -export([default_authentication_handler/1]).
 -export([cookie_authentication_handler/1]).
+-export([delegated_authentication_handler/1]).
 -export([party_mode_handler/1]).
 
 -export([handle_session_req/1]).
@@ -47,6 +48,7 @@ default_authentication_handler(Req) ->
 cookie_authentication_handler(Req) ->
     couch_httpd_auth:cookie_authentication_handler(Req, chttpd_auth_cache).
 
+
 party_mode_handler(Req) ->
     case config:get("chttpd", "require_valid_user", "false") of
     "true" ->
@@ -59,6 +61,9 @@ party_mode_handler(Req) ->
             Req#httpd{user_ctx=#user_ctx{}}
         end
     end.
+
+delegated_authentication_handler(Req) ->
+    couch_httpd_auth:handle_delegated_session_req(Req, chttpd_auth_cache).
 
 handle_session_req(Req) ->
     couch_httpd_auth:handle_session_req(Req, chttpd_auth_cache).
