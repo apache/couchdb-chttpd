@@ -156,12 +156,17 @@ handle_request_int(MochiReq) ->
     RawUri = MochiReq:get(raw_path),
     {"/" ++ Path, _, _} = mochiweb_util:urlsplit_path(RawUri),
 
+    % get requested path
+    RequestedPath = case MochiReq:get_header_value("x-couchdb-vhost-path") of
+        undefined ->
+            case MochiReq:get_header_value("x-couchdb-requested-path") of
+                undefined -> RawUri;
+                R -> R
+            end;
+        P -> P
+    end,
+
     Peer = MochiReq:get(peer),
-    LogForClosedSocket = io_lib:format("mochiweb_recv_error for ~s - ~p ~s", [
-        Peer,
-        MochiReq:get(method),
-        RawUri
-    ]),
 
     Method1 =
     case MochiReq:get(method) of
@@ -206,16 +211,10 @@ handle_request_int(MochiReq) ->
         nonce = Nonce,
         method = Method,
         path_parts = [list_to_binary(chttpd:unquote(Part))
-                || Part <- string:tokens(Path, "/")]
+                || Part <- string:tokens(Path, "/")],
+        requested_path_parts = [?l2b(unquote(Part))
+                || Part <- string:tokens(RequestedPath, "/")]
     },
-
-    {ok, HttpReq} = chttpd_plugin:before_request(HttpReq0),
-
-    HandlerKey =
-        case HttpReq#httpd.path_parts of
-            [] -> <<>>;
-            [Key|_] -> ?l2b(quote(Key))
-        end,
 
     % put small token on heap to keep requests synced to backend calls
     erlang:put(nonce, Nonce),
@@ -223,7 +222,60 @@ handle_request_int(MochiReq) ->
     % suppress duplicate log
     erlang:put(dont_log_request, true),
 
-    Result0 =
+    {HttpReq2, Response} = case before_request(HttpReq0) of
+        {ok, HttpReq1} ->
+            process_request(HttpReq1);
+        {error, Response0} ->
+            {HttpReq0, Response0}
+    end,
+
+    {Status, Code, Reason, Resp} = split_response(Response),
+
+    HttpResp = #httpd_resp{
+        code = Code,
+        status = Status,
+        response = Resp,
+        nonce = HttpReq2#httpd.nonce,
+        reason = Reason
+    },
+
+    case after_request(HttpReq2, HttpResp) of
+        #httpd_resp{status = ok, response = Resp} ->
+            {ok, Resp};
+        #httpd_resp{status = aborted, reason = Reason} ->
+            couch_log:error("Response abnormally terminated: ~p", [Reason]),
+            exit(normal)
+    end.
+
+before_request(HttpReq) ->
+    try
+        chttpd_plugin:before_request(HttpReq)
+    catch Tag:Error ->
+        {error, catch_error(HttpReq, Tag, Error)}
+    end.
+
+after_request(HttpReq, HttpResp0) ->
+    {ok, HttpResp1} =
+        try
+            chttpd_plugin:after_request(HttpReq, HttpResp0)
+        catch _Tag:Error ->
+            Stack = erlang:get_stacktrace(),
+            send_error(HttpReq, {Error, nil, Stack}),
+            {ok, HttpResp0#httpd_resp{status = aborted}}
+        end,
+    HttpResp2 = update_stats(HttpReq, HttpResp1),
+    maybe_log(HttpReq, HttpResp2),
+    HttpResp2.
+
+process_request(#httpd{mochi_req = MochiReq} = HttpReq) ->
+    HandlerKey =
+        case HttpReq#httpd.path_parts of
+            [] -> <<>>;
+            [Key|_] -> ?l2b(quote(Key))
+        end,
+
+    RawUri = MochiReq:get(raw_path),
+
     try
         couch_httpd:validate_host(HttpReq),
         check_request_uri_length(RawUri),
@@ -237,77 +289,57 @@ handle_request_int(MochiReq) ->
                     fun chttpd_auth_request:authorize_request/1),
                 {AuthorizedReq, HandlerFun(AuthorizedReq)};
             Response ->
-                Response
+                {HttpReq, Response}
             end;
         Response ->
-            Response
+            {HttpReq, Response}
         end
-    catch
-        throw:{http_head_abort, Resp0} ->
-            {ok, Resp0};
-        throw:{http_abort, Resp0, Reason0} ->
-            {aborted, Resp0, Reason0};
-        throw:{invalid_json, _} ->
-            send_error(HttpReq, {bad_request, "invalid UTF-8 JSON"});
-        exit:{mochiweb_recv_error, E} ->
-            couch_log:notice(LogForClosedSocket ++ " - ~p", [E]),
-            exit(normal);
-        exit:{uri_too_long, _} ->
-            send_error(HttpReq, request_uri_too_long);
-        exit:{body_too_large, _} ->
-            send_error(HttpReq, request_entity_too_large);
-        throw:Error ->
-            send_error(HttpReq, Error);
-        error:database_does_not_exist ->
-            send_error(HttpReq, database_does_not_exist);
-        Tag:Error ->
-            Stack = erlang:get_stacktrace(),
-            % TODO improve logging and metrics collection for client disconnects
-            case {Tag, Error, Stack} of
-                {exit, normal, [{mochiweb_request, send, _, _} | _]} ->
-                    exit(normal); % Client disconnect (R15+)
-                {exit, normal, [{mochiweb_request, send, _} | _]} ->
-                    exit(normal); % Client disconnect (R14)
-                _Else ->
-                    send_error(HttpReq, {Error, nil, Stack})
-            end
-    end,
-
-    {HttpReq1, HttpResp0} = result(Result0, HttpReq),
-    {ok, HttpResp1} = chttpd_plugin:after_request(HttpReq1, HttpResp0),
-
-    HttpResp2 = update_stats(HttpReq1, HttpResp1),
-    maybe_log(HttpReq1, HttpResp2),
-
-    case HttpResp2 of
-        #httpd_resp{status = ok, response = Resp} ->
-            {ok, Resp};
-        #httpd_resp{status = aborted, reason = Reason} ->
-            couch_log:error("Response abnormally terminated: ~p", [Reason]),
-            exit(normal)
+    catch Tag:Error ->
+        {HttpReq, catch_error(HttpReq, Tag, Error)}
     end.
 
-result({#httpd{} = Req, Result}, _) ->
-    result(Result, Req);
-result(Result, #httpd{nonce = Nonce} = Req) ->
-    {Status, Code, Reason} = case Result of
-        {ok, #delayed_resp{resp=Resp}} ->
-            {ok, Resp:get(code), undefined};
-        {ok, Resp} ->
-            {ok, Resp:get(code), undefined};
-        {aborted, Resp, AbortReason} ->
-            {aborted, Resp:get(code), AbortReason}
-        end,
+catch_error(_HttpReq, throw, {http_head_abort, Resp}) ->
+    {ok, Resp};
+catch_error(_HttpReq, throw, {http_abort, Resp, Reason}) ->
+    {aborted, Resp, Reason};
+catch_error(HttpReq, throw, {invalid_json, _}) ->
+    send_error(HttpReq, {bad_request, "invalid UTF-8 JSON"});
+catch_error(HttpReq, exit, {mochiweb_recv_error, E}) ->
+    #httpd{
+        mochi_req = MochiReq,
+        peer = Peer,
+        original_method = Method
+    } = HttpReq,
+    couch_log:notice("mochiweb_recv_error for ~s - ~p ~s - ~p", [
+        Peer,
+        Method,
+        MochiReq:get(raw_path),
+        E]),
+    exit(normal);
+catch_error(HttpReq, exit, {uri_too_long, _}) ->
+    send_error(HttpReq, request_uri_too_long);
+catch_error(HttpReq, exit, {body_too_large, _}) ->
+    send_error(HttpReq, request_entity_too_large);
+catch_error(HttpReq, throw, Error) ->
+    send_error(HttpReq, Error);
+catch_error(HttpReq, error, database_does_not_exist) ->
+    send_error(HttpReq, database_does_not_exist);
+catch_error(HttpReq, Tag, Error) ->
+    Stack = erlang:get_stacktrace(),
+    % TODO improve logging and metrics collection for client disconnects
+    case {Tag, Error, Stack} of
+        {exit, normal, [{mochiweb_request, send, _, _} | _]} ->
+            exit(normal); % Client disconnect (R15+)
+        _Else ->
+            send_error(HttpReq, {Error, nil, Stack})
+    end.
 
-    HttpResp = #httpd_resp{
-        code = Code,
-        status = Status,
-        response = Resp,
-        nonce = Nonce,
-        reason = Reason
-    },
-    {Req, HttpResp}.
-
+split_response({ok, #delayed_resp{resp=Resp}}) ->
+    {ok, Resp:get(code), undefined, Resp};
+split_response({ok, Resp}) ->
+    {ok, Resp:get(code), undefined, Resp};
+split_response({aborted, Resp, AbortReason}) ->
+    {aborted, Resp:get(code), AbortReason, Resp}.
 
 update_stats(HttpReq, #httpd_resp{end_ts = undefined} = Res) ->
     update_stats(HttpReq, Res#httpd_resp{end_ts = os:timestamp()});
@@ -381,7 +413,7 @@ fix_uri(Req, Props, Type) ->
         true ->
             Props;
         false ->
-            Uri = make_uri(Req,replication_uri(Type, Props)),
+            Uri = make_uri(Req, quote(Uri0)),
             [{Type,Uri}|proplists:delete(Type,Props)]
         end
     end.
@@ -402,8 +434,9 @@ is_http(_) ->
     false.
 
 make_uri(Req, Raw) ->
+    Port = integer_to_list(mochiweb_socket_server:get(chttpd, port)),
     Url = list_to_binary(["http://", config:get("httpd", "bind_address"),
-                         ":", config:get("chttpd", "port"), "/", Raw]),
+                          ":", Port, "/", Raw]),
     Headers = [
         {<<"authorization">>, ?l2b(header_value(Req,"authorization",""))},
         {<<"cookie">>, ?l2b(extract_cookie(Req))}
@@ -877,31 +910,29 @@ error_headers(#httpd{mochi_req=MochiReq}=Req, 401=Code, ErrorStr, ReasonStr) ->
                         % send the browser popup header no matter what if we are require_valid_user
                         {Code, [{"WWW-Authenticate", "Basic realm=\"server\""}]};
                     _False ->
-                        % if the accept header matches html, then do the redirect. else proceed as usual.
-                        Accepts = case MochiReq:get_header_value("Accept") of
-                        undefined ->
-                           % According to the HTTP 1.1 spec, if the Accept
-                           % header is missing, it means the client accepts
-                           % all media types.
-                           "html";
-                        Else ->
-                            Else
-                        end,
-                        case re:run(Accepts, "\\bhtml\\b",
-                                [{capture, none}, caseless]) of
-                        nomatch ->
+                        case MochiReq:accepts_content_type("application/json") of
+                        true ->
                             {Code, []};
-                        match ->
-                            AuthRedirectBin = ?l2b(AuthRedirect),
-                            % Redirect to the path the user requested, not
-                            % the one that is used internally.
-                            UrlReturnRaw = case MochiReq:get_header_value("x-couchdb-vhost-path") of
-                                undefined -> MochiReq:get(path);
-                                VHostPath -> VHostPath
-                            end,
-                            UrlReturn = ?l2b(couch_util:url_encode(UrlReturnRaw)),
-                            UrlReason = ?l2b(couch_util:url_encode(ReasonStr)),
-                            {302, [{"Location", couch_httpd:absolute_uri(Req, <<AuthRedirectBin/binary,"?return=",UrlReturn/binary,"&reason=",UrlReason/binary>>)}]}
+                        false ->
+                            case MochiReq:accepts_content_type("text/html") of
+                            true ->
+                                % Redirect to the path the user requested, not
+                                % the one that is used internally.
+                                UrlReturnRaw = case MochiReq:get_header_value("x-couchdb-vhost-path") of
+                                undefined ->
+                                    MochiReq:get(path);
+                                VHostPath ->
+                                    VHostPath
+                                end,
+                                RedirectLocation = lists:flatten([
+                                    AuthRedirect,
+                                    "?return=", couch_util:url_encode(UrlReturnRaw),
+                                    "&reason=", couch_util:url_encode(ReasonStr)
+                                ]),
+                                {302, [{"Location", absolute_uri(Req, RedirectLocation)}]};
+                            false ->
+                                {Code, []}
+                            end
                         end
                     end
                 end;

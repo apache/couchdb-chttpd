@@ -99,15 +99,16 @@ show_etag(#httpd{user_ctx=UserCtx}=Req, Doc, DDoc, More) ->
 %     send_method_not_allowed(Req, "POST,PUT,DELETE,ETC");
 
 handle_doc_update_req(#httpd{
-        path_parts=[_, _, _, _, UpdateName, DocId]
-    }=Req, Db, DDoc) ->
-    Doc = maybe_open_doc(Db, DocId),
-    send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId);
-
-handle_doc_update_req(#httpd{
         path_parts=[_, _, _, _, UpdateName]
     }=Req, Db, DDoc) ->
     send_doc_update_response(Req, Db, DDoc, UpdateName, nil, null);
+
+handle_doc_update_req(#httpd{
+        path_parts=[_, _, _, _, UpdateName | DocIdParts]
+    }=Req, Db, DDoc) ->
+    DocId = ?l2b(string:join([?b2l(P) || P <- DocIdParts], "/")),
+    Doc = maybe_open_doc(Db, DocId),
+    send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId);
 
 handle_doc_update_req(Req, _Db, _DDoc) ->
     chttpd:send_error(Req, 404, <<"update_error">>, <<"Invalid path.">>).
@@ -153,18 +154,21 @@ send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId) ->
 
 
 % view-list request with view and list from same design doc.
-handle_view_list_req(#httpd{method='GET',
-        path_parts=[_, _, DesignName, _, ListName, ViewName]}=Req, Db, DDoc) ->
+handle_view_list_req(#httpd{method=Method,
+        path_parts=[_, _, DesignName, _, ListName, ViewName]}=Req, Db, DDoc)
+        when Method =:= 'GET' orelse Method =:= 'OPTIONS' ->
     Keys = chttpd:qs_json_value(Req, "keys", undefined),
     handle_view_list(Req, Db, DDoc, ListName, {DesignName, ViewName}, Keys);
 
 % view-list request with view and list from different design docs.
-handle_view_list_req(#httpd{method='GET',
-        path_parts=[_, _, _, _, ListName, DesignName, ViewName]}=Req, Db, DDoc) ->
+handle_view_list_req(#httpd{method=Method,
+        path_parts=[_, _, _, _, ListName, DesignName, ViewName]}=Req, Db, DDoc)
+        when Method =:= 'GET' orelse Method =:= 'OPTIONS' ->
     Keys = chttpd:qs_json_value(Req, "keys", undefined),
     handle_view_list(Req, Db, DDoc, ListName, {DesignName, ViewName}, Keys);
 
-handle_view_list_req(#httpd{method='GET'}=Req, _Db, _DDoc) ->
+handle_view_list_req(#httpd{method=Method}=Req, _Db, _DDoc)
+        when Method =:= 'GET' orelse Method =:= 'OPTIONS' ->
     chttpd:send_error(Req, 404, <<"list_error">>, <<"Invalid path.">>);
 
 handle_view_list_req(#httpd{method='POST',

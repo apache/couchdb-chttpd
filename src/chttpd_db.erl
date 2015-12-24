@@ -584,12 +584,12 @@ db_req(#httpd{method='GET',path_parts=[_,<<"_revs_limit">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_revs_limit">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "PUT,GET");
 
-% vanilla CouchDB sends a 301 here, but we just handle the request
-db_req(#httpd{path_parts=[DbName,<<"_design/",Name/binary>>|Rest]}=Req, Db) ->
-    db_req(Req#httpd{path_parts=[DbName, <<"_design">>, Name | Rest]}, Db);
-
 % Special case to enable using an unencoded slash in the URL of design docs,
 % as slashes in document IDs must otherwise be URL encoded.
+db_req(#httpd{method='GET', mochi_req=MochiReq, path_parts=[_DbName, <<"_design/", _/binary>> | _]}=Req, _Db) ->
+    [Head | Tail] = re:split(MochiReq:get(raw_path), "_design%2F", [{return, list}, caseless]),
+    chttpd:send_redirect(Req, Head ++ "_design/" ++ Tail);
+
 db_req(#httpd{path_parts=[_DbName,<<"_design">>,Name]}=Req, Db) ->
     db_doc_req(Req, Db, <<"_design/",Name/binary>>);
 
@@ -623,18 +623,11 @@ all_docs_view(Req, Db, Keys, OP) ->
     Args1 = Args0#mrargs{view_type=map},
     Args2 = couch_mrview_util:validate_args(Args1),
     Args3 = set_namespace(OP, Args2),
-    %% TODO: proper calculation of etag
-    Etag = [$", couch_uuids:new(), $"],
     Options = [{user_ctx, Req#httpd.user_ctx}],
-    {ok, Resp} = couch_httpd:etag_maybe(Req, fun() ->
-        Max = chttpd:chunked_response_buffer_size(),
-        VAcc0 = #vacc{db=Db, req=Req, threshold=Max, etag=Etag},
-        fabric:all_docs(Db, Options, fun couch_mrview_http:view_cb/2, VAcc0, Args3)
-    end),
-    case is_record(Resp, vacc) of
-        true -> {ok, Resp#vacc.resp};
-        _ -> {ok, Resp}
-    end.
+    Max = chttpd:chunked_response_buffer_size(),
+    VAcc = #vacc{db=Db, req=Req, threshold=Max},
+    {ok, Resp} = fabric:all_docs(Db, Options, fun couch_mrview_http:view_cb/2, VAcc, Args3),
+    {ok, Resp#vacc.resp}.
 
 db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
     % check for the existence of the doc to handle the 404 case.
@@ -647,7 +640,7 @@ db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
     end,
     send_updated_doc(Req, Db, DocId, couch_doc_from_req(Req, DocId, Body));
 
-db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
+db_doc_req(#httpd{method='GET', mochi_req=MochiReq}=Req, Db, DocId) ->
     #doc_query_args{
         rev = Rev,
         open_revs = Revs,
@@ -666,15 +659,11 @@ db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
         send_doc(Req, Doc, Options2);
     _ ->
         {ok, Results} = fabric:open_revs(Db, DocId, Revs, Options),
-        AcceptedTypes = case couch_httpd:header_value(Req, "Accept") of
-            undefined       -> [];
-            AcceptHeader    -> string:tokens(AcceptHeader, ", ")
-        end,
         case Results of
             [] when Revs == all ->
                 chttpd:send_error(Req, {not_found, missing});
             _Else ->
-                case lists:member("multipart/mixed", AcceptedTypes) of
+                case MochiReq:accepts_content_type("multipart/mixed") of
                 false ->
                     {ok, Resp} = start_json_response(Req, 200),
                     send_chunk(Resp, "["),
@@ -777,7 +766,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
     RespHeaders = [{"Location", Loc}],
     case couch_util:to_list(couch_httpd:header_value(Req, "Content-Type")) of
     ("multipart/related;" ++ _) = ContentType ->
-        couch_doc:num_mp_writers(mem3:n(mem3:dbname(Db#db.name), DocId)),
+        couch_httpd_multipart:num_mp_writers(mem3:n(mem3:dbname(Db#db.name), DocId)),
         {ok, Doc0, WaitFun, Parser} = couch_doc:doc_from_multi_part_stream(ContentType,
                 fun() -> receive_request_data(Req) end),
         Doc = couch_doc_from_req(Req, DocId, Doc0),
@@ -787,7 +776,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
             Result
         catch throw:Err ->
             % Document rejected by a validate_doc_update function.
-            couch_doc:abort_multi_part_stream(Parser),
+            couch_httpd_multipart:abort_multipart_stream(Parser),
             throw(Err)
         end;
     _Else ->
@@ -858,16 +847,12 @@ send_doc(Req, Doc, Options) ->
 
 send_doc_efficiently(Req, #doc{atts=[]}=Doc, Headers, Options) ->
         send_json(Req, 200, Headers, couch_doc:to_json_obj(Doc, Options));
-send_doc_efficiently(Req, #doc{atts=Atts}=Doc, Headers, Options) ->
+send_doc_efficiently(#httpd{mochi_req=MochiReq}=Req, #doc{atts=Atts}=Doc, Headers, Options) ->
     case lists:member(attachments, Options) of
     true ->
         Refs = monitor_attachments(Atts),
         try
-        AcceptedTypes = case couch_httpd:header_value(Req, "Accept") of
-            undefined       -> [];
-            AcceptHeader    -> string:tokens(AcceptHeader, ", ")
-        end,
-        case lists:member("multipart/related", AcceptedTypes) of
+        case MochiReq:accepts_content_type("multipart/related") of
         false ->
             send_json(Req, 200, Headers, couch_doc:to_json_obj(Doc, Options));
         true ->
@@ -1500,7 +1485,7 @@ parse_changes_query(Req) ->
                 undefined ->
                     ChangesArgs;
                 Value ->
-                    ChangesArgs#changes_args{since=list_to_integer(Value)}
+                    ChangesArgs#changes_args{since=Value}
             end;
         _ ->
             ChangesArgs
