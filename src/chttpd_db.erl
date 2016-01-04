@@ -407,12 +407,13 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
         true  -> [all_or_nothing|Options];
         _ -> Options
         end,
-        couch_log:debug("chttpd_db: update_docs wellcome. Going to store attachment in external store",[]),
-        case fabric_attachments_handler:externalize_att(Db) of
-            "true" ->
-                NewDocs = fabric_attachments_handler:inline_att_store(Db,fabric:docs(Docs));
-            "false" ->
-                couch_log:debug("Store inline attachmets in object store disabled",[]),
+        case fabric_att_handler:external_store() of
+            true ->
+                couch_log:debug("store attachment externaly", []),
+                NewDocs = fabric_att_handler:att_store(Db,
+                                                          fabric:docs(Docs));
+            false ->
+                couch_log:debug("externalize attachment: disabled",[]),
                 NewDocs = Docs
         end,
         case fabric:update_docs(Db, NewDocs, Options2) of
@@ -730,15 +731,12 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
     NewDoc = Doc#doc{
         atts = UpdatedAtts ++ OldAtts2
     },
-    couch_log:debug("chttpd_db: couchNew doc formed including new att: formed",[]),
-    lists:foreach(fun(X) -> couch_log:debug("~p~n ~p~n",[couch_att:fetch(data, X), couch_att:fetch(name, X)]) end, NewDoc#doc.atts),
-    couch_log:debug("chttpd_db: going to call attachment handler for base64 attachments",[]),
-    case fabric_attachments_handler:externalize_att(Db) of
-        "true" ->
-            NewNewDoc = fabric_attachments_handler:inline_att_store(Db, NewDoc); %store_single_document
-		"false" ->
+    NewNewDoc = case fabric_att_handler:external_store() of
+        true ->
+            fabric_att_handler:att_store(Db, NewDoc); %store_single_document
+		false ->
             couch_log:debug("Store inline attachmets in Swift disabled",[]),
-            NewNewDoc = NewDoc
+            NewDoc
     end,
     case fabric:update_doc(Db, NewNewDoc, Options) of
     {ok, NewRev} ->
@@ -1083,15 +1081,14 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
     [] ->
         throw({not_found, "Document is missing attachment"});
     [TmpAtt] ->
-        AttExternal = couch_att:fetch(att_external,TmpAtt),
-        couch_log:debug("chttpd_db: attachment stored in external store ~p~n",[AttExternal]),
-        case AttExternal of
-            "external" ->
-                Att = fabric_attachments_handler:inline_att_handler(get, Db, TmpAtt),
-                couch_log:debug("chtttpd_db: Got attachment from external store",[]);
+        ExtStoreID = couch_att:fetch(att_extstore_id,TmpAtt),
+        case ExtStoreID of
+            undefined ->
+                couch_log:debug("chttpd_db: Att is not stored in the external store ~p~n",[ExtStoreID]),
+                Att = TmpAtt;
             _ ->
-                couch_log:debug("chttpd_db: Att is not stored in external store",[]),
-                Att = TmpAtt
+                Att = fabric_att_handler:att(get, Db, TmpAtt),
+                couch_log:debug("chtttpd_db: Got attachment from the external store ~p~n",[ExtStoreID])
         end,
         [Type, Enc, DiskLen, AttLen, Md5] = couch_att:fetch([type, encoding, disk_len, att_len, md5], Att),
         Refs = monitor_attachments(Att),
@@ -1146,13 +1143,11 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
         true ->
             fun couch_att:foldl/3
         end,
-        case AttExternal of
-            "external" ->
-                AttFun = couch_att:fetch(data,Att),
-                couch_log:debug("chtttpd_db: Got new attachment ",[]);
+        case ExtStoreID of
+            undefined ->
+                AttFun = AttFunTmp;
             _ ->
-                couch_log:debug("chttpd_db: not external att",[]),
-                AttFun = AttFunTmp
+                AttFun = couch_att:fetch(data,Att)
         end,
         chttpd:etag_respond(
             Req,
@@ -1182,11 +1177,11 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
                                     []
                             end,
                             {ok, Resp} = start_response_length(Req, 200, Headers1, Len),
-                            case AttExternal of 
-                                "external" ->
-                                    send(Resp,couch_att:fetch(data, Att)), {ok, Resp};
+                            case ExtStoreID of 
+                                undefined ->
+                                    AttFun(Att, fun(Seg, _) -> send(Resp, Seg) end, {ok, Resp});
                                 _ ->
-                                    AttFun(Att, fun(Seg, _) -> send(Resp, Seg) end, {ok, Resp})
+                                    send(Resp,couch_att:fetch(data, Att)), {ok, Resp}
                             end
                     end
                 end
@@ -1233,21 +1228,32 @@ db_attachment_req(#httpd{method=Method, user_ctx=Ctx}=Req, Db, DocId, FileNamePa
                         "Only gzip and identity content-encodings are supported"
                     })
             end,
-            case fabric_attachments_handler:externalize_att(Db) of
-                "true" ->
-                    {Data, ExternalObjectSize, ExternalEtagMD5} = fabric_attachments_handler:normal_att_store(FileName,Db,ContentLen,MimeType,Req),
-                    [couch_att:new([
-                        {name, FileName},
-                        {type, MimeType},
-                        {data, Data},
-                        {att_len, ContentLen},
-                        {md5, get_md5_header(Req)},
-                        {encoding, Encoding},
-                        {att_external_size,ExternalObjectSize},
-                        {att_external_md5,ExternalEtagMD5},
-                        {att_external,"external"}
-                    ])];
-                "false" ->
+            case fabric_att_handler:external_store() of
+                true ->
+                    case fabric_att_handler:att_store(FileName,Db,ContentLen,MimeType,Req) of
+                        {ok,{Data, ExternalObjectSize, ExternalEtagMD5, StoreID}} ->
+                            [couch_att:new([
+                                {name, FileName},
+                                {type, MimeType},
+                                {data, Data},
+                                {att_len, ContentLen},
+                                {md5, get_md5_header(Req)},
+                                {encoding, Encoding},
+                                {att_extstore_size,ExternalObjectSize},
+                                {att_extstore_md5,ExternalEtagMD5},
+                                {att_extstore_id,StoreID}
+                            ])];
+                        {error, Data} ->
+                            [couch_att:new([
+                                {name, FileName},
+                                {type, MimeType},
+                                {data, Data},
+                                {att_len, ContentLen},
+                                {md5, get_md5_header(Req)},
+                                {encoding, Encoding}
+                            ])]
+                    end;
+                false ->
                     Data = fabric:att_receiver(Req, chttpd:body_length(Req)),
                     [couch_att:new([
                         {name, FileName},
