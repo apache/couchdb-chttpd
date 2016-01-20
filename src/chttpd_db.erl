@@ -407,14 +407,11 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
         true  -> [all_or_nothing|Options];
         _ -> Options
         end,
-        case fabric_att_handler:external_store() of
+        NewDocs = case fabric_att_handler:external_store() of
             true ->
-                couch_log:debug("store attachment externaly", []),
-                NewDocs = fabric_att_handler:att_store(Db,
-                                                          fabric:docs(Docs));
+                fabric_att_handler:att_store(Db, fabric:docs(Docs));
             false ->
-                couch_log:debug("externalize attachment: disabled",[]),
-                NewDocs = Docs
+                Docs
         end,
         case fabric:update_docs(Db, NewDocs, Options2) of
         {ok, Results} ->
@@ -735,15 +732,14 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
         true ->
             fabric_att_handler:att_store(Db, NewDoc); %store_single_document
 		false ->
-            couch_log:debug("Store inline attachmets in Swift disabled",[]),
             NewDoc
     end,
     case fabric:update_doc(Db, NewNewDoc, Options) of
-    {ok, NewRev} ->
-        HttpCode = 201;
-    {accepted, NewRev} ->
-        HttpCode = 202
-    end,
+        {ok, NewRev} ->
+            HttpCode = 201;
+        {accepted, NewRev} ->
+            HttpCode = 202
+        end,
     send_json(Req, HttpCode, [{"Etag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewRev)) ++ "\""}], {[
         {ok, true},
         {id, DocId},
@@ -1084,11 +1080,15 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
         ExtStoreID = couch_att:fetch(att_extstore_id,TmpAtt),
         case ExtStoreID of
             undefined ->
-                couch_log:debug("chttpd_db: Att is not stored in the external store ~p~n",[ExtStoreID]),
                 Att = TmpAtt;
             _ ->
-                Att = fabric_att_handler:att(get, Db, TmpAtt),
-                couch_log:debug("chtttpd_db: Got attachment from the external store ~p~n",[ExtStoreID])
+                Att = case fabric_att_handler:att_get(Db, TmpAtt) of
+                    {ok, Att1} ->
+                        couch_log:info("chtttpd_db: Got attachment from the external store ~p~n",[ExtStoreID]),
+                        Att1;
+                    {error, msg} ->
+                        throw({error, msg})
+                end
         end,
         [Type, Enc, DiskLen, AttLen, Md5] = couch_att:fetch([type, encoding, disk_len, att_len, md5], Att),
         Refs = monitor_attachments(Att),
@@ -1137,17 +1137,11 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
             % header we'll fall back to a chunked response.
             undefined
         end,
-        AttFunTmp = case ReqAcceptsAttEnc of
+        AttFun = case ReqAcceptsAttEnc of
         false ->
             fun couch_att:foldl_decode/3;
         true ->
             fun couch_att:foldl/3
-        end,
-        case ExtStoreID of
-            undefined ->
-                AttFun = AttFunTmp;
-            _ ->
-                AttFun = couch_att:fetch(data,Att)
         end,
         chttpd:etag_respond(
             Req,
