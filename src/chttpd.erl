@@ -693,7 +693,7 @@ send_response(#httpd{}=Req0, Code0, Headers0, Body0) ->
     Headers1 = Headers0 ++ server_header() ++
 	[timing(), reqid() | couch_httpd_auth:cookie_auth_header(Req0, Headers0)],
 
-    {ok, {#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body}} =
+    {ok, {#httpd{mochi_req=MochiReq}, Code, Headers, Body}} =
         chttpd_plugin:before_response(Req0, Code0, Headers1, Body0),
 
     couch_stats:increment_counter([couchdb, httpd_status_codes, Code]),
