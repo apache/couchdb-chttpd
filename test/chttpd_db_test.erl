@@ -83,17 +83,19 @@ should_accept_live_as_an_alias_for_continuous(Url) ->
         {ok, _, _, ResultBody} =
             test_request:get(Url ++ "/_changes?feed=live&timeout=1", [?AUTH]),
         {ResultJson} = ?JSON_DECODE(ResultBody),
-        <<LastSeqNum0:1/binary, "-", _/binary>> = couch_util:get_value(
-            <<"last_seq">>, ResultJson, undefined),
-        LastSeqNum = list_to_integer(binary_to_list(LastSeqNum0)),
+        LastSeqNum = seq_num(couch_util:get_value(<<"last_seq">>, ResultJson)),
 
         {ok, _, _, _} = create_doc(Url, "testdoc2"),
         {ok, _, _, ResultBody2} = 
             test_request:get(Url ++ "/_changes?feed=live&timeout=1", [?AUTH]),
         [_, CleanedResult] = binary:split(ResultBody2, <<"\n">>),
         {[{_, Seq}, _]} = ?JSON_DECODE(CleanedResult),
-        <<SeqNum0:1/binary, "-", _/binary>> = Seq,
-        SeqNum = list_to_integer(binary_to_list(SeqNum0)),
+        SeqNum = seq_num(Seq),
 
         ?assertEqual(LastSeqNum + 1, SeqNum)
     end).
+
+seq_num(<<SeqNumBin:1/binary, "-", _/binary>>) ->
+    binary_to_integer(SeqNumBin);
+seq_num([SeqNum, _]) ->
+    SeqNum.
