@@ -858,6 +858,10 @@ error_info({error, {database_name_too_long, DbName}}) ->
         <<"At least one path segment of `", DbName/binary, "` is too long.">>};
 error_info({missing_stub, Reason}) ->
     {412, <<"missing_stub">>, Reason};
+error_info({single_doc_too_large, MaxSize}) ->
+    SizeBin = list_to_binary(integer_to_list(MaxSize)),
+    {413, <<"too_large">>, <<"Document exceeded single_max_doc_size:",
+        SizeBin/binary>>};
 error_info(request_entity_too_large) ->
     {413, <<"too_large">>, <<"the request entity is too large">>};
 error_info({error, security_migration_updates_disabled}) ->

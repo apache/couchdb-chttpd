@@ -308,7 +308,10 @@ db_req(#httpd{method='POST', path_parts=[DbName], user_ctx=Ctx}=Req, Db) ->
     W = chttpd:qs_value(Req, "w", integer_to_list(mem3:quorum(Db))),
     Options = [{user_ctx,Ctx}, {w,W}],
 
-    Doc = couch_doc:from_json_obj(chttpd:json_body(Req)),
+    Body = chttpd:json_body(Req),
+    ok = verify_doc_size(Body),
+
+    Doc = couch_doc:from_json_obj(Body),
     Doc2 = case Doc#doc.id of
         <<"">> ->
             Doc#doc{id=couch_uuids:new(), revs={0, []}};
@@ -374,6 +377,7 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
     DocsArray0 ->
         DocsArray0
     end,
+    {ExceedErrs, DocsArray1} = remove_exceed_docs(DocsArray),
     couch_stats:update_histogram([couchdb, httpd, bulk_docs], length(DocsArray)),
     W = case couch_util:get_value(<<"w">>, JsonProps) of
     Value when is_integer(Value) ->
@@ -401,39 +405,38 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
                 end,
                 Doc#doc{id=Id}
             end,
-            DocsArray),
+            DocsArray1),
         Options2 =
         case couch_util:get_value(<<"all_or_nothing">>, JsonProps) of
         true  -> [all_or_nothing|Options];
         _ -> Options
         end,
-        case fabric:update_docs(Db, Docs, Options2) of
-        {ok, Results} ->
+        {Code, Results} = case fabric:update_docs(Db, Docs, Options2) of
+        {ok, Results0} ->
             % output the results
-            DocResults = lists:zipwith(fun update_doc_result_to_json/2,
-                Docs, Results),
-            send_json(Req, 201, DocResults);
-        {accepted, Results} ->
+            {201, lists:zipwith(fun update_doc_result_to_json/2, Docs,
+                Results0)};
+        {accepted, Results0} ->
             % output the results
-            DocResults = lists:zipwith(fun update_doc_result_to_json/2,
-                Docs, Results),
-            send_json(Req, 202, DocResults);
+            {202, lists:zipwith(fun update_doc_result_to_json/2, Docs,
+                Results0)};
         {aborted, Errors} ->
-            ErrorsJson =
-                lists:map(fun update_doc_result_to_json/1, Errors),
-            send_json(Req, 417, ErrorsJson)
-        end;
+            {417, lists:map(fun update_doc_result_to_json/1, Errors)}
+        end,
+        FinalResults =  lists:keysort(1, ExceedErrs ++ Results),
+        send_json(Req, Code, FinalResults);
     false ->
         Docs = [couch_doc:from_json_obj(JsonObj) || JsonObj <- DocsArray],
         [validate_attachment_names(D) || D <- Docs],
-        case fabric:update_docs(Db, Docs, [replicated_changes|Options]) of
-        {ok, Errors} ->
-            ErrorsJson = lists:map(fun update_doc_result_to_json/1, Errors),
-            send_json(Req, 201, ErrorsJson);
-        {accepted, Errors} ->
-            ErrorsJson = lists:map(fun update_doc_result_to_json/1, Errors),
-            send_json(Req, 202, ErrorsJson)
-        end
+        {Code, Errs1} = case fabric:update_docs(Db, Docs, [replicated_changes|Options]) of
+        {ok, Errs0} ->
+            {201, Errs0};
+        {accepted, Errs0} ->
+            {202, Errs0}
+        end,
+        Errs2 = lists:map(fun update_doc_result_to_json/1, Errs1),
+        FinalErrors = lists:keysort(1, ExceedErrs ++ Errs2),
+        send_json(Req, Code, FinalErrors)
     end;
 
 db_req(#httpd{path_parts=[_,<<"_bulk_docs">>]}=Req, _Db) ->
@@ -765,7 +768,9 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         case chttpd:qs_value(Req, "batch") of
         "ok" ->
             % batch
-            Doc = couch_doc_from_req(Req, DocId, chttpd:json_body(Req)),
+            Body = chttpd:json_body(Req),
+            ok = verify_doc_size(Body),
+            Doc = couch_doc_from_req(Req, DocId, Body),
 
             spawn(fun() ->
                     case catch(fabric:update_doc(Db, Doc, Options)) of
@@ -782,6 +787,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         _Normal ->
             % normal
             Body = chttpd:json_body(Req),
+            ok = verify_doc_size(Body),
             Doc = couch_doc_from_req(Req, DocId, Body),
             send_updated_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType)
         end
@@ -1628,6 +1634,34 @@ bulk_get_open_doc_revs1(Db, Props, _, {DocId, Revs, Options}) ->
             {DocId, Results, Options}
     end.
 
+remove_exceed_docs(DocArray0) ->
+    MaxSize = list_to_integer(config:get("couchdb",
+        "single_max_doc_size", "1048576")),
+    {ExceedDocs, DocsArray} = lists:splitwith(fun (Doc) ->
+        exceed_doc_size(Doc, MaxSize)
+    end, DocArray0),
+    ExceedErrs = lists:map (fun ({Doc}) ->
+        DocId = case couch_util:get_value(<<"_id">>, Doc) of
+            undefined -> couch_uuids:new();
+            Id0 -> Id0
+        end,
+        Reason = lists:concat(["Document exceeded single_max_doc_size:",
+            " of ", MaxSize, " bytes"]),
+        {[{id, DocId}, {error, <<"too_large">>},
+            {reason, ?l2b(Reason)}]}
+    end, ExceedDocs),
+    {ExceedErrs, DocsArray}.
+
+exceed_doc_size(JsonBody, MaxSize) ->
+    size(term_to_binary(JsonBody)) > MaxSize.
+
+verify_doc_size(JsonBody) ->
+    SMaxSize = list_to_integer(config:get("couchdb",
+        "single_max_doc_size", "1048576")),
+    case exceed_doc_size(JsonBody, SMaxSize) of
+        true -> throw({single_doc_too_large, SMaxSize});
+        false -> ok
+    end.
 
 parse_field(<<"id">>, undefined) ->
     {ok, undefined};
