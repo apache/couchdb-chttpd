@@ -309,10 +309,8 @@ db_req(#httpd{method='POST', path_parts=[DbName], user_ctx=Ctx}=Req, Db) ->
     W = chttpd:qs_value(Req, "w", integer_to_list(mem3:quorum(Db))),
     Options = [{user_ctx,Ctx}, {w,W}],
 
-    Body = chttpd:json_body(Req),
-    ok = maybe_verify_body_size(Body),
-
-    Doc = couch_doc:from_json_obj(Body),
+    Doc = couch_doc:from_json_obj(chttpd:json_body(Req)),
+    ok = maybe_verify_body_size(Doc#doc.body),
     Doc2 = case Doc#doc.id of
         <<"">> ->
             Doc#doc{id=couch_uuids:new(), revs={0, []}};
@@ -769,10 +767,8 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         case chttpd:qs_value(Req, "batch") of
         "ok" ->
             % batch
-            Body = chttpd:json_body(Req),
-            ok = maybe_verify_body_size(Body),
-            Doc = couch_doc_from_req(Req, DocId, Body),
-
+            Doc = couch_doc_from_req(Req, DocId, chttpd:json_body(Req)),
+            ok = maybe_verify_body_size(Doc#doc.body),
             spawn(fun() ->
                     case catch(fabric:update_doc(Db, Doc, Options)) of
                     {ok, _} -> ok;
@@ -788,8 +784,8 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         _Normal ->
             % normal
             Body = chttpd:json_body(Req),
-            ok = maybe_verify_body_size(Body),
             Doc = couch_doc_from_req(Req, DocId, Body),
+            ok = maybe_verify_body_size(Doc#doc.body),
             send_updated_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType)
         end
     end;
