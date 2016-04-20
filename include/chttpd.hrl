@@ -26,3 +26,6 @@
     (C >= $a andalso C =< $f) orelse
     (C >= $A andalso C =< $F)
 )).
+
+% For any PUT/POST request, max size will be 4 GB (semi-unlimited)
+-define(DEFAULT_RECV_BODY, 4294967296).

@@ -13,6 +13,7 @@
 -module(chttpd_db).
 -include_lib("couch/include/couch_db.hrl").
 -include_lib("couch_mrview/include/couch_mrview.hrl").
+-include_lib("chttpd/include/chttpd.hrl").
 
 -export([handle_request/1, handle_compact_req/2, handle_design_req/2,
     db_req/2, couch_doc_open/4,handle_changes_req/2,
@@ -309,7 +310,7 @@ db_req(#httpd{method='POST', path_parts=[DbName], user_ctx=Ctx}=Req, Db) ->
     Options = [{user_ctx,Ctx}, {w,W}],
 
     Body = chttpd:json_body(Req),
-    ok = verify_doc_size(Body),
+    ok = maybe_verify_body_size(Body),
 
     Doc = couch_doc:from_json_obj(Body),
     Doc2 = case Doc#doc.id of
@@ -377,7 +378,7 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>], user_ctx=Ctx}=Req, 
     DocsArray0 ->
         DocsArray0
     end,
-    {ExceedErrs, DocsArray1} = remove_exceed_docs(DocsArray),
+    {ExceedErrs, DocsArray1} = maybe_remove_exceed_docs(DocsArray),
     couch_stats:update_histogram([couchdb, httpd, bulk_docs], length(DocsArray)),
     W = case couch_util:get_value(<<"w">>, JsonProps) of
     Value when is_integer(Value) ->
@@ -769,7 +770,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         "ok" ->
             % batch
             Body = chttpd:json_body(Req),
-            ok = verify_doc_size(Body),
+            ok = maybe_verify_body_size(Body),
             Doc = couch_doc_from_req(Req, DocId, Body),
 
             spawn(fun() ->
@@ -787,7 +788,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         _Normal ->
             % normal
             Body = chttpd:json_body(Req),
-            ok = verify_doc_size(Body),
+            ok = maybe_verify_body_size(Body),
             Doc = couch_doc_from_req(Req, DocId, Body),
             send_updated_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType)
         end
@@ -1634,33 +1635,43 @@ bulk_get_open_doc_revs1(Db, Props, _, {DocId, Revs, Options}) ->
             {DocId, Results, Options}
     end.
 
-remove_exceed_docs(DocArray0) ->
-    MaxSize = list_to_integer(config:get("couchdb",
-        "single_max_doc_size", "1048576")),
-    {ExceedDocs, DocsArray} = lists:splitwith(fun (Doc) ->
-        exceed_doc_size(Doc, MaxSize)
-    end, DocArray0),
-    ExceedErrs = lists:map (fun ({Doc}) ->
-        DocId = case couch_util:get_value(<<"_id">>, Doc) of
-            undefined -> couch_uuids:new();
-            Id0 -> Id0
-        end,
-        Reason = lists:concat(["Document exceeded single_max_doc_size:",
-            " of ", MaxSize, " bytes"]),
-        {[{id, DocId}, {error, <<"too_large">>},
-            {reason, ?l2b(Reason)}]}
-    end, ExceedDocs),
-    {ExceedErrs, DocsArray}.
+maybe_remove_exceed_docs(DocArray0) ->
+    case config:get_boolean("couchdb", "use_max_document_size", false) of
+        true ->
+            Max = config:get_integer("couchdb", "max_document_size",
+                16777216),
+            {ExceedDocs, DocsArray} = lists:splitwith(fun (Doc) ->
+                exceed_doc_size(Doc, Max)
+            end, DocArray0),
+            ExceedErrs = lists:map (fun ({Doc}) ->
+            DocId = case couch_util:get_value(<<"_id">>, Doc) of
+                undefined -> <<"no id generated since update failed">>;
+                Id0 -> Id0
+            end,
+            Reason = lists:concat(["Document exceeded max_document_size:",
+                " of ", Max, " bytes"]),
+            {[{id, DocId}, {error, <<"request_entity_too_large">>},
+                {reason, ?l2b(Reason)}]}
+            end, ExceedDocs),
+            {ExceedErrs, DocsArray};
+        false ->
+            {[], DocArray0}
+    end.
 
 exceed_doc_size(JsonBody, MaxSize) ->
     size(term_to_binary(JsonBody)) > MaxSize.
 
-verify_doc_size(JsonBody) ->
-    SMaxSize = list_to_integer(config:get("couchdb",
-        "single_max_doc_size", "1048576")),
-    case exceed_doc_size(JsonBody, SMaxSize) of
-        true -> throw({single_doc_too_large, SMaxSize});
-        false -> ok
+maybe_verify_body_size(JsonBody) ->
+    case config:get_boolean("couchdb", "use_max_document_size", false) of
+        true ->
+            Max = config:get_integer("couchdb", "max_document_size",
+                16777216),
+            case exceed_doc_size(JsonBody, Max) of
+                true -> throw({request_entity_too_large, Max});
+                false -> ok
+            end;
+        false ->
+            ok
     end.
 
 parse_field(<<"id">>, undefined) ->

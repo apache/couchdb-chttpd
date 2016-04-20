@@ -22,7 +22,8 @@
 
 setup() ->
     ok = config:set("admins", ?USER, ?PASS, _Persist=false),
-    ok = config:set("couchdb", "single_max_doc_size", "50"),
+    ok = config:set("couchdb", "max_document_size", "50"),
+    ok = config:set("couchdb", "use_max_document_size", "true"),
     TmpDb = ?tempdb(),
     Addr = config:get("chttpd", "bind_address", "127.0.0.1"),
     Port = mochiweb_socket_server:get(chttpd, port),
@@ -33,7 +34,8 @@ setup() ->
 teardown(Url) ->
     delete_db(Url),
     ok = config:delete("admins", ?USER, _Persist=false),
-    ok = config:delete("couchdb", "single_max_doc_size").
+    ok = config:delete("couchdb", "max_document_size"),
+    ok = config:delete("couchdb", "use_max_document_size").
 
 create_db(Url) ->
     {ok, Status, _, _} = test_request:put(Url, [?CONTENT_JSON, ?AUTH], "{}"),

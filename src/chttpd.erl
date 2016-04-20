@@ -599,12 +599,9 @@ body_length(#httpd{mochi_req=MochiReq}) ->
 body(#httpd{mochi_req=MochiReq, req_body=ReqBody}) ->
     case ReqBody of
         undefined ->
-            % Maximum size of document PUT request body (4GB)
-            MaxSize = list_to_integer(
-                config:get("couchdb", "max_document_size", "4294967296")),
             Begin = os:timestamp(),
             try
-                MochiReq:recv_body(MaxSize)
+                MochiReq:recv_body(?DEFAULT_RECV_BODY)
             after
                 T = timer:now_diff(os:timestamp(), Begin) div 1000,
                 put(body_time, T)
@@ -858,9 +855,9 @@ error_info({error, {database_name_too_long, DbName}}) ->
         <<"At least one path segment of `", DbName/binary, "` is too long.">>};
 error_info({missing_stub, Reason}) ->
     {412, <<"missing_stub">>, Reason};
-error_info({single_doc_too_large, MaxSize}) ->
+error_info({request_entity_too_large, MaxSize}) ->
     SizeBin = list_to_binary(integer_to_list(MaxSize)),
-    {413, <<"too_large">>, <<"Document exceeded single_max_doc_size:",
+    {413, <<"too_large">>, <<"Document exceeded max_document_size:",
         SizeBin/binary>>};
 error_info(request_entity_too_large) ->
     {413, <<"too_large">>, <<"the request entity is too large">>};
