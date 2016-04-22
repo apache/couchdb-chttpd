@@ -19,6 +19,11 @@
 -define(PASS, "pass").
 -define(AUTH, {basic_auth, {?USER, ?PASS}}).
 -define(CONTENT_JSON, {"Content-Type", "application/json"}).
+-define(CONTENT_MULTI_RELATED, {"Content-Type",
+    "multipart/related;boundary=\"bound\""}).
+-define(CONTENT_MULTI_FORM, {"Content-Type",
+    "multipart/form-data;boundary=\"bound\""}).
+
 
 setup() ->
     ok = config:set("admins", ?USER, ?PASS, _Persist=false),
@@ -46,7 +51,7 @@ delete_db(Url) ->
 
 all_test_() ->
     {
-        "chttpd db single doc max size test",
+        "chttpd db max_document_size tests",
         {
             setup,
             fun chttpd_test_util:start_couch/0, fun chttpd_test_util:stop_couch/1,
@@ -56,7 +61,10 @@ all_test_() ->
                 [
                     fun post_single_doc/1,
                     fun put_single_doc/1,
-                    fun bulk_doc/1
+                    fun bulk_doc/1,
+                    fun put_post_doc_attach_inline/1,
+                    fun put_multi_part_related/1,
+                    fun post_multi_part_form/1
                 ]
             }
         }
@@ -96,3 +104,75 @@ bulk_doc(Url) ->
     Msg = couch_util:get_value(<<"error">>, InnerJson2),
     ?_assertEqual(<<"too_large">>, Error),
     ?_assertEqual(undefined, Msg).
+
+put_post_doc_attach_inline(Url) ->
+    Body1 = "{\"body\":\"This is a body.\",",
+    Body2 = lists:concat(["{\"body\":\"This is a body it should fail",
+        "because there are too many characters.\","]),
+    DocRest =  lists:concat(["\"_attachments\":{\"foo.txt\":{",
+        "\"content_type\":\"text/plain\",",
+        "\"data\": \"VGhpcyBpcyBhIGJhc2U2NCBlbmNvZGVkIHRleHQ=\"}}}"]),
+    Doc1 = lists:concat([Body1, DocRest]),
+    Doc2 = lists:concat([Body2, DocRest]),
+
+    {ok, _, _, ResultBody} = test_request:post(Url,
+        [?CONTENT_JSON, ?AUTH], Doc1),
+    {Msg} = ?JSON_DECODE(ResultBody),
+    ?_assertEqual({<<"ok">>, true}, lists:nth(1, Msg)),
+       {ok, _, _, ResultBody1} = test_request:post(Url,
+        [?CONTENT_JSON, ?AUTH], Doc2),
+    {Msg1} = ?JSON_DECODE(ResultBody1),
+    ?_assertEqual({<<"error">>, <<"too_large">>}, lists:nth(1, Msg1)),
+
+    {ok, _, _, ResultBody2} = test_request:put(Url ++ "/" ++ "accept",
+        [?CONTENT_JSON, ?AUTH], Doc1),
+    {Msg2} = ?JSON_DECODE(ResultBody2),
+    ?_assertEqual({<<"ok">>, true}, lists:nth(1, Msg2)),
+    {ok, _, _, ResultBody3} = test_request:put(Url ++ "/" ++ "fail",
+        [?CONTENT_JSON, ?AUTH], Doc2),
+    {Msg3} = ?JSON_DECODE(ResultBody3),
+    ?_assertEqual({<<"error">>, <<"too_large">>}, lists:nth(1, Msg3)).
+
+put_multi_part_related(Url) ->
+    Body1 = "{\"body\":\"This is a body.\",",
+    Body2 = lists:concat(["{\"body\":\"This is a body it should fail",
+        "because there are too many characters.\","]),
+    DocBeg = "--bound\r\nContent-Type: application/json\r\n\r\n",
+    DocRest =  lists:concat(["\"_attachments\":{\"foo.txt\":{\"follows\":true,",
+        "\"content_type\":\"text/plain\",\"length\":21},\"bar.txt\":",
+        "{\"follows\":true,\"content_type\":\"text/plain\",",
+        "\"length\":20}}}\r\n--bound\r\n\r\nthis is 21 chars long",
+        "\r\n--bound\r\n\r\nthis is 20 chars lon\r\n--bound--epilogue"]),
+    Doc1 = lists:concat([DocBeg, Body1, DocRest]),
+    Doc2 = lists:concat([DocBeg, Body2, DocRest]),
+    {ok, _, _, ResultBody} = test_request:put(Url ++ "/" ++ "accept",
+        [?CONTENT_MULTI_RELATED, ?AUTH], Doc1),
+    {Msg} = ?JSON_DECODE(ResultBody),
+    ?_assertEqual({<<"ok">>, true}, lists:nth(1, Msg)),
+       {ok, _, _, ResultBody1} = test_request:put(Url ++ "/" ++ "faildoc",
+        [?CONTENT_MULTI_RELATED, ?AUTH], Doc2),
+    {Msg1} = ?JSON_DECODE(ResultBody1),
+    ?_assertEqual({<<"error">>, <<"too_large">>}, lists:nth(1, Msg1)).
+
+post_multi_part_form(Url) ->
+    Port = mochiweb_socket_server:get(chttpd, port),
+    Host = lists:concat([ "http://127.0.0.1:", Port]),
+    Referer = {"Referer", Host},
+    Body1 = "{\"body\":\"This is a body.\"}",
+    Body2 = lists:concat(["{\"body\":\"This is a body it should fail",
+        "because there are too many characters.\"}"]),
+    DocBeg = "--bound\r\nContent-Disposition: form-data; name=\"_doc\"\r\n\r\n",
+    DocRest = lists:concat(["\r\n--bound\r\nContent-Disposition:",
+        "form-data; name=\"_attachments\"; filename=\"file.txt\"\r\n",
+        "Content-Type: text/plain\r\n\r\ncontents of file.txt\r\n\r\n",
+        "--bound--"]),
+    Doc1 = lists:concat([DocBeg, Body1, DocRest]),
+    Doc2 = lists:concat([DocBeg, Body2, DocRest]),
+    {ok, _, _, ResultBody} = test_request:post(Url ++ "/" ++ "accept",
+        [?CONTENT_MULTI_FORM, ?AUTH, Referer], Doc1),
+    {Msg} = ?JSON_DECODE(ResultBody),
+    ?_assertEqual({<<"ok">>, true}, lists:nth(1, Msg)),
+    {ok, _, _, ResultBody1} = test_request:post(Url ++ "/" ++ "fail",
+        [?CONTENT_MULTI_FORM, ?AUTH, Referer], Doc2),
+    {Msg1} = ?JSON_DECODE(ResultBody1),
+    ?_assertEqual({<<"error">>, <<"too_large">>}, lists:nth(1, Msg1)).
