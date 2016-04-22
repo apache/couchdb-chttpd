@@ -698,7 +698,8 @@ db_doc_req(#httpd{method='POST', user_ctx=Ctx}=Req, Db, DocId) ->
     case proplists:is_defined("_doc", Form) of
     true ->
         Json = ?JSON_DECODE(couch_util:get_value("_doc", Form)),
-        Doc = couch_doc_from_req(Req, DocId, Json);
+        Doc = couch_doc_from_req(Req, DocId, Json),
+        ok = maybe_verify_body_size(Doc#doc.body);
     false ->
         Rev = couch_doc:parse_rev(list_to_binary(couch_util:get_value("_rev", Form))),
         {ok, [{ok, Doc}]} = fabric:open_revs(Db, DocId, [Rev], [])
@@ -754,6 +755,7 @@ db_doc_req(#httpd{method='PUT', user_ctx=Ctx}=Req, Db, DocId) ->
         {ok, Doc0, WaitFun, Parser} = couch_doc:doc_from_multi_part_stream(ContentType,
                 fun() -> receive_request_data(Req) end),
         Doc = couch_doc_from_req(Req, DocId, Doc0),
+        ok = maybe_verify_body_size(Doc#doc.body),
         try
             Result = send_updated_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType),
             WaitFun(),
