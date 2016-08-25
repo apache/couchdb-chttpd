@@ -40,7 +40,7 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
 
 %% reset between queries in multi-query
 reset_vacc(Vacc) ->
-    Vacc#vacc{row_sent=false}.
+    Vacc#vacc{row_sent=false, meta_sent=false}.
 
 
 design_doc_view(Req, Db, DDoc, ViewName, Keys) ->
