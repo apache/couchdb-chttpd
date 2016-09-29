@@ -20,6 +20,7 @@
 -import(chttpd,[send_error/4]).
 
 -include_lib("couch/include/couch_db.hrl").
+-include_lib("chttpd/include/chttpd.hrl").
 
 % handle_external_req/2
 % for the old type of config usage:
@@ -93,8 +94,7 @@ json_req_obj_field(<<"headers">>, #httpd{mochi_req=Req}, _Db, _DocId) ->
     Hlist = mochiweb_headers:to_list(Headers),
     to_json_terms(Hlist);
 json_req_obj_field(<<"body">>, #httpd{req_body=undefined, mochi_req=Req}, _Db, _DocId) ->
-    MaxSize = config:get_integer("couchdb", "max_document_size", 4294967296),
-    Req:recv_body(MaxSize);
+    Req:recv_body(?DEFAULT_RECV_BODY);
 json_req_obj_field(<<"body">>, #httpd{req_body=Body}, _Db, _DocId) ->
     Body;
 json_req_obj_field(<<"peer">>, #httpd{mochi_req=Req}, _Db, _DocId) ->
