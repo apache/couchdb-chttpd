@@ -490,10 +490,8 @@ set_auth_handlers() ->
 % - this only works for modules with exactly two underscores in their name
 % - is not very robust (a space after the ',' is assumed) 
 auth_handler_name(SpecStr) ->
-    case couch_util:parse_term(SpecStr) of
-    {ok, {_, Fun}} ->
-        hd(string:tokens(atom_to_list(Fun), "_"))
-    end.
+    {ok, {_, Fun}} = couch_util:parse_term(SpecStr),
+    hd(string:tokens(atom_to_list(Fun), "_")).
 
 authenticate_request(Req) ->
     {ok, AuthenticationFuns} = application:get_env(chttpd, auth_handlers),
