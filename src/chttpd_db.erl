@@ -465,6 +465,7 @@ db_req(#httpd{method='POST', path_parts=[_, <<"_bulk_get">>]}=Req, Db) ->
         undefined ->
             throw({bad_request, <<"Missing JSON list of 'docs'.">>});
         Docs ->
+            couch_stats:update_histogram([couchdb, httpd, bulk_reads], length(Docs)),
             #doc_query_args{
                 options = Options
             } = bulk_get_parse_doc_query(Req),
