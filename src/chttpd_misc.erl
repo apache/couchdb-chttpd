@@ -21,13 +21,16 @@
     handle_reload_query_servers_req/1,
     handle_system_req/1,
     handle_task_status_req/1,
+    handle_scheduler_req/1,
     handle_up_req/1,
     handle_utils_dir_req/1,
     handle_utils_dir_req/2,
     handle_uuids_req/1,
     handle_welcome_req/1,
     handle_welcome_req/2,
-    get_stats/0
+    get_stats/0,
+    parse_int_param/5,
+    parse_replication_state_filter/1
 ]).
 
 -include_lib("couch/include/couch_db.hrl").
@@ -36,6 +39,13 @@
 -import(chttpd,
     [send_json/2,send_json/3,send_method_not_allowed/2,
     send_chunk/2,start_chunked_response/3]).
+
+
+-record(rep_docs_acc, {prepend, resp, count, skip, limit}).
+
+
+-define(DEFAULT_DOCS_LIMIT, 100).
+-define(REPDB, <<"_replicator">>).
 
 % httpd global handlers
 
@@ -148,6 +158,39 @@ handle_task_status_req(#httpd{method='GET'}=Req) ->
     end, Replies),
     send_json(Req, lists:sort(Response));
 handle_task_status_req(Req) ->
+    send_method_not_allowed(Req, "GET,HEAD").
+
+handle_scheduler_req(#httpd{method='GET', path_parts=[_,<<"docs">>]}=Req) ->
+    Limit = parse_int_param(Req, "limit", ?DEFAULT_DOCS_LIMIT, 0, infinity),
+    Skip = parse_int_param(Req, "skip", 0, 0, infinity),
+    States = parse_replication_state_filter(chttpd:qs_value(Req, "states")),
+    SkipStr = integer_to_list(Skip),
+    Preamble = ["{\r\n\"offset\": ", SkipStr, ",\r\n\"docs\": ["],
+    {ok, Resp} = chttpd:start_delayed_json_response(Req, 200, [], Preamble),
+    Fun = fun stream_doc_info_cb/2,
+    Acc = #rep_docs_acc{
+        prepend = "\r\n",
+        resp = Resp,
+        count = 0,
+        skip = Skip,
+        limit = Limit
+    },
+    Acc1 = couch_replicator:stream_active_docs_info(Fun, Acc, States),
+    Acc2 = couch_replicator:stream_terminal_docs_info(?REPDB, Fun, Acc1, States),
+    #rep_docs_acc{resp = Resp1, count = Total}  = Acc2,
+    TotalStr = integer_to_list(Total),
+    Postamble = ["\r\n],\r\n\"total\": ", TotalStr, "\r\n}\r\n"],
+    {ok, Resp2} = chttpd:send_delayed_chunk(Resp1, Postamble),
+    chttpd:end_delayed_json_response(Resp2);
+handle_scheduler_req(#httpd{method='GET', path_parts=[_,<<"docs">>,DocId]}=Req) ->
+    UserCtx = Req#httpd.user_ctx,
+    case couch_replicator:doc(?REPDB, DocId, UserCtx#user_ctx.roles) of
+        {ok, DocInfo} ->
+			send_json(Req, DocInfo);
+        {error, not_found} ->
+            throw(not_found)
+    end;
+handle_scheduler_req(Req) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
 handle_replicate_req(#httpd{method='POST', user_ctx=Ctx} = Req) ->
@@ -439,3 +482,58 @@ message_queues(Registered) ->
         {Type, Length} = process_info(whereis(Name), Type),
         {Name, Length}
     end, Registered).
+
+stream_doc_info_cb(Info, Acc) ->
+    #rep_docs_acc{
+        resp = Resp,
+        prepend = Pre,
+        count = Count,
+        skip = Skip,
+        limit = Limit
+    } = Acc,
+    case Count >= Skip andalso Count < (Skip + Limit) of
+    true ->
+        Chunk = [Pre, ?JSON_ENCODE(Info)],
+        {ok, Resp1} = chttpd:send_delayed_chunk(Resp, Chunk),
+        Acc#rep_docs_acc{resp = Resp1, prepend =  ",\r\n", count = Count + 1};
+    false ->
+        Acc#rep_docs_acc{count = Count + 1}
+    end.
+
+parse_replication_state_filter(undefined) ->
+    [];  % This is the default (wildcard) filter
+parse_replication_state_filter(States) when is_list(States) ->
+    AllStates = couch_replicator:replication_states(),
+    StrStates = [string:to_lower(S) || S <- string:tokens(States, ",")],
+    AtomStates = try
+        [list_to_existing_atom(S) || S <- StrStates]
+    catch error:badarg ->
+        Msg1 = io_lib:format("States must be one or more of ~w", [AllStates]),
+        throw({query_parse_error, ?l2b(Msg1)})
+    end,
+    AllSet = sets:from_list(AllStates),
+    StatesSet = sets:from_list(AtomStates),
+    Diff = sets:to_list(sets:subtract(StatesSet, AllSet)),
+    case Diff of
+    [] ->
+        AtomStates;
+    _ ->
+        Args = [Diff, AllStates],
+        Msg2 = io_lib:format("Unknown states ~w. Choose from: ~w", Args),
+        throw({query_parse_error, ?l2b(Msg2)})
+    end.
+
+parse_int_param(Req, Param, Default, Min, Max) ->
+    IntVal = try
+        list_to_integer(chttpd:qs_value(Req, Param, integer_to_list(Default)))
+    catch error:badarg ->
+        Msg1 = io_lib:format("~s must be an integer", [Param]),
+        throw({query_parse_error, ?l2b(Msg1)})
+    end,
+    case IntVal >= Min andalso IntVal =< Max of
+    true ->
+        IntVal;
+    false ->
+        Msg2 = io_lib:format("~s not in range of [~w,~w]", [Param, Min, Max]),
+        throw({query_parse_error, ?l2b(Msg2)})
+    end.
