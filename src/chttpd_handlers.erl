@@ -15,7 +15,11 @@
 -export([
     url_handler/2,
     db_handler/2,
-    design_handler/2
+    design_handler/2,
+    endpoints/1,
+    endpoints/2,
+    handler/3,
+    handlers/2
 ]).
 
 -define(SERVICE_ID, chttpd_handlers).
@@ -34,6 +38,24 @@ db_handler(HandlerKey, DefaultFun) ->
 
 design_handler(HandlerKey, DefaultFun) ->
     select(collect(design_handler, [HandlerKey]), DefaultFun).
+
+%% ------------------------------------------------------------------
+%% Introspection Function Definitions
+%% ------------------------------------------------------------------
+
+endpoints(Module, EndpointType) ->
+    Module:endpoints(EndpointType).
+
+endpoints(EndpointType) ->
+    Results = do_apply(endpoints, [EndpointType], [ignore_providers]),
+    lists:append(Results).
+
+handler(Module, EndpointType, HandlerKey) ->
+    Module:EndpointType(HandlerKey).
+
+handlers(Module, EndpointType) ->
+    Endpoints = endpoints(Module, EndpointType),
+    [{E, handler(Module, EndpointType, E)} || E <- Endpoints].
 
 %% ------------------------------------------------------------------
 %% Internal Function Definitions
