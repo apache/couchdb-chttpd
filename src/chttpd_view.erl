@@ -32,10 +32,15 @@ multi_query_view(Req, Db, DDoc, ViewName, Queries) ->
     VAcc1 = VAcc0#vacc{resp=Resp0},
     VAcc2 = lists:foldl(fun(Args, Acc0) ->
         {ok, Acc1} = fabric:query_view(Db, DDoc, ViewName, fun couch_mrview_http:view_cb/2, Acc0, Args),
-        Acc1
+        reset_vacc(Acc1)
     end, VAcc1, ArgQueries),
     {ok, Resp1} = chttpd:send_delayed_chunk(VAcc2#vacc.resp, "\r\n]}"),
     chttpd:end_delayed_json_response(Resp1).
+
+
+%% reset between queries in multi-query
+reset_vacc(Vacc) ->
+    Vacc#vacc{row_sent=false, meta_sent=false}.
 
 
 design_doc_view(Req, Db, DDoc, ViewName, Keys) ->
