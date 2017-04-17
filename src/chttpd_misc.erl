@@ -141,6 +141,13 @@ all_dbs_callback({error, Reason}, #vacc{resp=Resp0}=Acc) ->
     {ok, Resp1} = chttpd:send_delayed_error(Resp0, Reason),
     {ok, Acc#vacc{resp=Resp1}}.
 
+handle_task_status_req(#httpd{method='GET', path_parts=[_, K, V]}=Req) ->
+    {Replies, _BadNodes} = gen_server:multi_call(couch_task_status,
+        {filter, K, V}),
+    Response = lists:flatmap(fun({Node, Tasks}) ->
+        [{[{node,Node} | Task]} || Task <- Tasks]
+    end, Replies),
+    send_json(Req, lists:sort(Response));
 handle_task_status_req(#httpd{method='GET'}=Req) ->
     {Replies, _BadNodes} = gen_server:multi_call(couch_task_status, all),
     Response = lists:flatmap(fun({Node, Tasks}) ->
